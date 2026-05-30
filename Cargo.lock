@@ -2642,6 +2642,7 @@ checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
 name = "qterm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "eframe",
  "egui",
  "portable-pty",
