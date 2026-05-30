@@ -1,0 +1,2 @@
+[env]
+LIBRARY_PATH = { value = "C:\\msys64\\mingw64\\lib", force = true }
