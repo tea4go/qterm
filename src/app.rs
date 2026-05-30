@@ -227,22 +227,35 @@ impl eframe::App for QTermApp {
                     return;
                 }
 
-                let tab = &self.tabs[self.active_tab];
-                let pane_count = tab.layout.pane_count();
+                let pane_count = {
+                    let tab = &self.tabs[self.active_tab];
+                    tab.layout.pane_count()
+                };
 
-                if pane_count <= 1 {
-                    // Single pane: full screen render
-                    let size = renderer::calculate_size(ui, self.theme.font_size);
-                    if size.rows != self.last_rows || size.cols != self.last_cols {
-                        self.last_rows = size.rows;
-                        self.last_cols = size.cols;
-                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                            if let Some(pane) = tab.layout.active_pane_mut() {
-                                pane.resize(size.rows, size.cols);
-                            }
+                // Calculate and apply terminal resize
+                let size = renderer::calculate_size(ui, self.theme.font_size);
+                let (target_rows, target_cols) = if pane_count <= 1 {
+                    (size.rows, size.cols)
+                } else {
+                    let tab = &self.tabs[self.active_tab];
+                    match tab.layout.direction {
+                        SplitDirection::Horizontal => ((size.rows / pane_count).max(1), size.cols),
+                        SplitDirection::Vertical => (size.rows, (size.cols / pane_count).max(1)),
+                    }
+                };
+                if target_rows != self.last_rows || target_cols != self.last_cols {
+                    self.last_rows = target_rows;
+                    self.last_cols = target_cols;
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        for pane in &mut tab.layout.panes {
+                            pane.resize(target_rows, target_cols);
                         }
                     }
-                    let tab = &self.tabs[self.active_tab];
+                }
+
+                let tab = &self.tabs[self.active_tab];
+                if pane_count <= 1 {
+                    // Single pane: full screen render
                     if let Some(pane) = tab.layout.active_pane() {
                         renderer::render(ui, &pane.terminal, &self.theme);
                     }
