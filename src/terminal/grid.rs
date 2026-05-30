@@ -103,4 +103,23 @@ impl Grid {
     pub fn scrollback_row(&self, idx: usize) -> Option<&[Cell]> {
         self.scrollback.get(idx).map(|r| r.as_slice())
     }
+
+    pub fn text_in_range(&self, start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> String {
+        let mut result = String::new();
+        for row in start_row..=end_row.min(self.rows - 1) {
+            let row_cells = &self.cells[row];
+            let col_start = if row == start_row { start_col.min(self.cols) } else { 0 };
+            let col_end = if row == end_row { end_col.min(self.cols - 1) } else { self.cols - 1 };
+            let mut line_text = String::new();
+            for col in col_start..=col_end {
+                line_text.push(row_cells[col].ch);
+            }
+            let trimmed = line_text.trim_end();
+            result.push_str(trimmed);
+            if row < end_row.min(self.rows - 1) {
+                result.push('\n');
+            }
+        }
+        result
+    }
 }

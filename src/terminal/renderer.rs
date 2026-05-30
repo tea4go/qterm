@@ -11,6 +11,13 @@ pub struct TerminalSize {
     pub cell_height: f32,
 }
 
+pub struct RenderResult {
+    pub response: egui::Response,
+    pub cell_width: f32,
+    pub cell_height: f32,
+    pub origin: Pos2,
+}
+
 pub fn calculate_size(ui: &Ui, font_size: f32) -> TerminalSize {
     let font_id = FontId::monospace(font_size);
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
@@ -26,7 +33,7 @@ pub fn calculate_size(ui: &Ui, font_size: f32) -> TerminalSize {
     }
 }
 
-pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) {
+pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> RenderResult {
     let font_id = FontId::monospace(theme.font_size);
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
     let cell_height = theme.font_size * 1.4;
@@ -89,6 +96,45 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) {
         }
     }
 
+    // Draw selection highlight
+    if let Some((sr, sc, er, ec)) = terminal.normalized_selection() {
+        for row in sr..=er.min(terminal.rows() - 1) {
+            let col_start = if row == sr { sc } else { 0 };
+            let col_end = if row == er { ec.min(terminal.cols() - 1) } else { terminal.cols() - 1 };
+            let y = origin.y + row as f32 * cell_height;
+            let x_start = origin.x + col_start as f32 * cell_width;
+            let x_end = origin.x + (col_end + 1) as f32 * cell_width;
+            let rect = Rect::from_min_size(
+                Pos2::new(x_start, y),
+                Vec2::new(x_end - x_start, cell_height),
+            );
+            painter.rect_filled(rect, 0.0, theme.selection_bg);
+            // Re-draw text on top of selection with appropriate color
+            let grid_row = terminal.grid.row(row);
+            let mut col = col_start;
+            while col <= col_end {
+                let start_col = col;
+                let fg = theme.selection_fg;
+                let mut text = String::new();
+                while col <= col_end {
+                    text.push(grid_row[col].ch);
+                    col += 1;
+                }
+                let trimmed = text.trim_end();
+                if !trimmed.is_empty() {
+                    let x = origin.x + start_col as f32 * cell_width;
+                    painter.text(
+                        Pos2::new(x, y),
+                        egui::Align2::LEFT_TOP,
+                        trimmed,
+                        font_id.clone(),
+                        fg,
+                    );
+                }
+            }
+        }
+    }
+
     // Draw cursor
     if terminal.cursor.visible && terminal.cursor.row < terminal.rows() {
         let cx = origin.x + terminal.cursor.col as f32 * cell_width;
@@ -110,6 +156,13 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) {
                 );
             }
         }
+    }
+
+    RenderResult {
+        response,
+        cell_width,
+        cell_height,
+        origin,
     }
 }
 

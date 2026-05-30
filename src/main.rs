@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod connection;
 mod pty;
 mod tab;
 mod terminal;

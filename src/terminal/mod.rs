@@ -12,6 +12,13 @@ pub struct Cursor {
     pub visible: bool,
 }
 
+pub struct Selection {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+}
+
 pub struct Terminal {
     pub grid: Grid,
     pub cursor: Cursor,
@@ -26,6 +33,7 @@ pub struct Terminal {
     pub scroll_bottom: usize,
     pub pending_replies: Vec<Vec<u8>>,
     vte_parser: vte::Parser,
+    pub selection: Option<Selection>,
 }
 
 impl Terminal {
@@ -44,6 +52,7 @@ impl Terminal {
             scroll_bottom: rows.saturating_sub(1),
             pending_replies: Vec::new(),
             vte_parser: vte::Parser::new(),
+            selection: None,
         }
     }
 
@@ -107,5 +116,58 @@ impl Terminal {
                 self.grid = main_grid;
             }
         }
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let (sr, sc, er, ec) = self.normalized_selection()?;
+        if sr == er && sc == ec {
+            return None;
+        }
+        Some(self.grid.text_in_range(sr, sc, er, ec))
+    }
+
+    pub fn normalized_selection(&self) -> Option<(usize, usize, usize, usize)> {
+        let sel = self.selection.as_ref()?;
+        if (sel.start_row, sel.start_col) <= (sel.end_row, sel.end_col) {
+            Some((sel.start_row, sel.start_col, sel.end_row, sel.end_col))
+        } else {
+            Some((sel.end_row, sel.end_col, sel.start_row, sel.start_col))
+        }
+    }
+
+    pub fn word_at(&self, row: usize, col: usize) -> Option<(usize, usize, usize, usize)> {
+        if row >= self.rows() || col >= self.cols() {
+            return None;
+        }
+        let row_cells = self.grid.row(row);
+        let ch = row_cells[col].ch;
+        if ch == ' ' {
+            return None;
+        }
+        let is_word_char = |c: char| c != ' ' && !c.is_control();
+        if !is_word_char(ch) {
+            return Some((row, col, row, col));
+        }
+        let mut start = col;
+        while start > 0 && is_word_char(row_cells[start - 1].ch) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end < self.cols() - 1 && is_word_char(row_cells[end + 1].ch) {
+            end += 1;
+        }
+        Some((row, start, row, end))
+    }
+
+    pub fn line_range(&self, row: usize) -> Option<(usize, usize, usize, usize)> {
+        if row >= self.rows() {
+            return None;
+        }
+        let mut end = self.cols() - 1;
+        let row_cells = self.grid.row(row);
+        while end > 0 && row_cells[end].ch == ' ' {
+            end -= 1;
+        }
+        Some((row, 0, row, end))
     }
 }

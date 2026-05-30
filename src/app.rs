@@ -1,6 +1,6 @@
 use eframe::egui;
-
 use crate::config::AppConfig;
+use crate::connection::models::Connection;
 use crate::tab::Tab;
 use crate::terminal::renderer;
 use crate::theme::AppTheme;
@@ -24,6 +24,9 @@ pub struct QTermApp {
     sftp_error: Option<String>,
     show_left_pane: bool,
     ribbon_active: RibbonSection,
+    context_menu: ContextMenu,
+    pending_mouse: Option<PendingMouse>,
+    connections: Vec<Connection>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -31,6 +34,24 @@ enum RibbonSection {
     Terminal,
     Sftp,
     Settings,
+}
+
+struct ContextMenu {
+    show: bool,
+    pos: egui::Pos2,
+}
+
+impl Default for ContextMenu {
+    fn default() -> Self {
+        Self { show: false, pos: egui::Pos2::ZERO }
+    }
+}
+
+struct PendingMouse {
+    response: egui::Response,
+    cell_width: f32,
+    cell_height: f32,
+    origin: egui::Pos2,
 }
 
 impl QTermApp {
@@ -54,6 +75,9 @@ impl QTermApp {
             sftp_error: None,
             show_left_pane: true,
             ribbon_active: RibbonSection::Terminal,
+            context_menu: ContextMenu::default(),
+            pending_mouse: None,
+            connections: crate::connection::load_connections(),
         };
         app.new_tab();
         app
@@ -167,6 +191,12 @@ impl eframe::App for QTermApp {
             if i.key_pressed(egui::Key::B) && i.modifiers.ctrl && !i.modifiers.shift {
                 action = Some(Action::ToggleLeftPane);
             }
+            if (i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)) && i.modifiers.ctrl {
+                action = Some(Action::FontZoomIn);
+            }
+            if i.key_pressed(egui::Key::Minus) && i.modifiers.ctrl {
+                action = Some(Action::FontZoomOut);
+            }
         });
         match action {
             Some(Action::NewTab) => self.new_tab(),
@@ -205,6 +235,16 @@ impl eframe::App for QTermApp {
             Some(Action::OpenSshDialog) => { self.ssh_dialog.open = true; }
             Some(Action::OpenSftp) => { self.handle_open_sftp(); }
             Some(Action::ToggleLeftPane) => { self.show_left_pane = !self.show_left_pane; }
+            Some(Action::FontZoomIn) => {
+                self.config.font_size = (self.config.font_size + 1.0).min(30.0);
+                self.theme.terminal.font_size = self.config.font_size;
+                Self::configure_fonts(ctx);
+            }
+            Some(Action::FontZoomOut) => {
+                self.config.font_size = (self.config.font_size - 1.0).max(11.0);
+                self.theme.terminal.font_size = self.config.font_size;
+                Self::configure_fonts(ctx);
+            }
             None => {}
         }
 
@@ -273,7 +313,13 @@ impl eframe::App for QTermApp {
                     if let Some(pane) = tab.layout.active_pane_mut() {
                         match &mut pane.kind {
                             PaneKind::Terminal { terminal, .. } => {
-                                renderer::render(ui, terminal, &self.theme.terminal);
+                                let rr = renderer::render(ui, terminal, &self.theme.terminal);
+                                self.pending_mouse = Some(PendingMouse {
+                                    response: rr.response,
+                                    cell_width: rr.cell_width,
+                                    cell_height: rr.cell_height,
+                                    origin: rr.origin,
+                                });
                             }
                             PaneKind::Sftp { panel } => {
                                 panel.show(ui);
@@ -300,7 +346,15 @@ impl eframe::App for QTermApp {
                                         ui.set_max_height(pane_height - 2.0);
                                         match &mut pane.kind {
                                             PaneKind::Terminal { terminal, .. } => {
-                                                renderer::render(ui, terminal, &self.theme.terminal);
+                                                let rr = renderer::render(ui, terminal, &self.theme.terminal);
+                                                if is_active {
+                                                    self.pending_mouse = Some(PendingMouse {
+                                                        response: rr.response,
+                                                        cell_width: rr.cell_width,
+                                                        cell_height: rr.cell_height,
+                                                        origin: rr.origin,
+                                                    });
+                                                }
                                             }
                                             PaneKind::Sftp { panel } => {
                                                 panel.show(ui);
@@ -327,7 +381,15 @@ impl eframe::App for QTermApp {
                                             ui.set_max_width(pane_width - 2.0);
                                             match &mut pane.kind {
                                                 PaneKind::Terminal { terminal, .. } => {
-                                                    renderer::render(ui, terminal, &self.theme.terminal);
+                                                    let rr = renderer::render(ui, terminal, &self.theme.terminal);
+                                                    if is_active {
+                                                        self.pending_mouse = Some(PendingMouse {
+                                                            response: rr.response,
+                                                            cell_width: rr.cell_width,
+                                                            cell_height: rr.cell_height,
+                                                            origin: rr.origin,
+                                                        });
+                                                    }
                                                 }
                                                 PaneKind::Sftp { panel } => {
                                                     panel.show(ui);
@@ -380,6 +442,8 @@ enum Action {
     OpenSshDialog,
     OpenSftp,
     ToggleLeftPane,
+    FontZoomIn,
+    FontZoomOut,
 }
 
 // ==================== Title Bar ====================
@@ -632,13 +696,48 @@ impl QTermApp {
         let text_color = self.theme.system.text_color;
         let active_bg = self.theme.system.app_left_list_bg_color_active;
         let active_fg = self.theme.system.app_left_list_text_color_active;
+
+        // Collect connection index to open on double-click
+        let mut open_conn_idx: Option<usize> = None;
+
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Quick Connect").size(12.0).color(side_text));
-            ui.add_space(4.0);
-            if ui.button("SSH Connection...").clicked() {
-                self.ssh_dialog.open = true;
+
+            // Connections from config
+            if !self.connections.is_empty() {
+                ui.label(egui::RichText::new("Connections").size(12.0).color(side_text));
+                ui.add_space(4.0);
+
+                // Group by group_name
+                let mut current_group = "";
+                for (idx, conn) in self.connections.iter().enumerate() {
+                    if conn.group_name != current_group {
+                        current_group = &conn.group_name;
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(&conn.group_name).size(11.0).color(side_text).strong());
+                    }
+
+                    let label = &conn.name;
+                    let (bg, fg) = (egui::Color32::TRANSPARENT, text_color);
+                    let inner = egui::Frame::none()
+                        .fill(bg)
+                        .rounding(egui::Rounding::same(4.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new(label).size(13.0).color(fg));
+                            });
+                        });
+                    if inner.response.double_clicked() {
+                        open_conn_idx = Some(idx);
+                    }
+                }
+            } else {
+                ui.label(egui::RichText::new("No connections found.").size(12.0).color(side_text));
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("WhaleTerm config not available.").size(11.0).color(side_text));
             }
+
             ui.add_space(12.0);
             ui.label(egui::RichText::new("Open Tabs").size(12.0).color(side_text));
             ui.add_space(4.0);
@@ -664,6 +763,39 @@ impl QTermApp {
                 }
             }
         });
+
+        // Open SSH connection if double-clicked
+        if let Some(idx) = open_conn_idx {
+            self.open_connection_tab(idx);
+        }
+    }
+
+    fn open_connection_tab(&mut self, conn_idx: usize) {
+        use crate::ssh::{SshConfig, SshAuth};
+
+        let conn = &self.connections[conn_idx];
+        let auth = if conn.private_key.is_empty() {
+            SshAuth::Password(conn.password.clone())
+        } else {
+            SshAuth::PrivateKey {
+                path: conn.private_key.clone(),
+                passphrase: Some(conn.password.clone()),
+            }
+        };
+        let config = SshConfig {
+            host: conn.addr.clone(),
+            port: conn.port,
+            username: conn.username.clone(),
+            auth,
+            timeout_secs: 10,
+        };
+        self.new_tab();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Err(e) = tab.layout.add_ssh_pane(config, SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines) {
+                self.sftp_error = Some(format!("SSH error: {}", e));
+                self.close_tab(self.active_tab);
+            }
+        }
     }
 
     fn render_sftp_section(&mut self, ui: &mut egui::Ui) {
@@ -783,7 +915,242 @@ impl QTermApp {
         }
     }
 
+    fn handle_terminal_mouse(&mut self) {
+        let pm = match self.pending_mouse.take() {
+            Some(pm) => pm,
+            None => return,
+        };
+        let tab = match self.tabs.get_mut(self.active_tab) {
+            Some(t) => t,
+            None => return,
+        };
+        let pane = match tab.layout.active_pane_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        let terminal = match &mut pane.kind {
+            PaneKind::Terminal { terminal, .. } => terminal,
+            PaneKind::Sftp { .. } => return,
+        };
+
+        let response = pm.response;
+        let cell_width = pm.cell_width;
+        let cell_height = pm.cell_height;
+        let origin = pm.origin;
+
+        // Right-click: open context menu
+        if response.secondary_clicked() {
+            self.context_menu.show = true;
+            self.context_menu.pos = response.hover_pos().unwrap_or(response.rect.center());
+        }
+
+        // Double-click: select word
+        if response.double_clicked() {
+            if let Some(pos) = response.hover_pos() {
+                let col = ((pos.x - origin.x) / cell_width).floor() as usize;
+                let row = ((pos.y - origin.y) / cell_height).floor() as usize;
+                if let Some((sr, sc, er, ec)) = terminal.word_at(row, col) {
+                    terminal.selection = Some(crate::terminal::Selection {
+                        start_row: sr, start_col: sc, end_row: er, end_col: ec,
+                    });
+                }
+            }
+            return;
+        }
+
+        // Triple-click: select line
+        if response.triple_clicked() {
+            if let Some(pos) = response.hover_pos() {
+                let row = ((pos.y - origin.y) / cell_height).floor() as usize;
+                if let Some((sr, sc, er, ec)) = terminal.line_range(row) {
+                    terminal.selection = Some(crate::terminal::Selection {
+                        start_row: sr, start_col: sc, end_row: er, end_col: ec,
+                    });
+                }
+            }
+            return;
+        }
+
+        // Left-click start: clear selection, begin new drag selection
+        if response.clicked() {
+            terminal.selection = None;
+        }
+
+        // Drag selection
+        if response.dragged() && response.is_pointer_button_down_on() {
+            if let Some(pos) = response.hover_pos() {
+                let col = ((pos.x - origin.x) / cell_width).floor() as usize;
+                let row = ((pos.y - origin.y) / cell_height).floor() as usize;
+                let col = col.min(terminal.cols().saturating_sub(1));
+                let row = row.min(terminal.rows().saturating_sub(1));
+                match &mut terminal.selection {
+                    Some(sel) => {
+                        sel.end_row = row;
+                        sel.end_col = col;
+                    }
+                    None => {
+                        terminal.selection = Some(crate::terminal::Selection {
+                            start_row: row, start_col: col, end_row: row, end_col: col,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_context_menu(&mut self, ctx: &egui::Context) {
+        if !self.context_menu.show {
+            return;
+        }
+
+        let menu_pos = self.context_menu.pos;
+        let has_selection = self.tabs.get(self.active_tab).and_then(|t| {
+            let idx = t.layout.active_pane;
+            t.layout.panes.get(idx).and_then(|p| match &p.kind {
+                PaneKind::Terminal { terminal, .. } => terminal.selected_text(),
+                _ => None,
+            })
+        });
+
+        let mut close_menu = false;
+        let mut do_copy = false;
+        let mut do_paste = false;
+        let mut do_clear = false;
+        let mut do_split_h = false;
+        let mut do_split_v = false;
+
+        egui::Area::new(egui::Id::new("context_menu"))
+            .fixed_pos(menu_pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let menu_frame = egui::Frame::popup(ui.style());
+                menu_frame.show(ui, |ui| {
+                    ui.set_min_width(160.0);
+                    ui.vertical(|ui| {
+                        let text_color = self.theme.system.text_color;
+                        let copy_label = if has_selection.is_some() { "Copy" } else { "Copy (no selection)" };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new(copy_label).size(13.0).color(text_color),
+                        ).frame(false)).clicked() && has_selection.is_some() {
+                            do_copy = true;
+                            close_menu = true;
+                        }
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Paste").size(13.0).color(text_color),
+                        ).frame(false)).clicked() {
+                            do_paste = true;
+                            close_menu = true;
+                        }
+                        ui.separator();
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Clear Screen").size(13.0).color(text_color),
+                        ).frame(false)).clicked() {
+                            do_clear = true;
+                            close_menu = true;
+                        }
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Split Horizontal").size(13.0).color(text_color),
+                        ).frame(false)).clicked() {
+                            do_split_h = true;
+                            close_menu = true;
+                        }
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Split Vertical").size(13.0).color(text_color),
+                        ).frame(false)).clicked() {
+                            do_split_v = true;
+                            close_menu = true;
+                        }
+                    });
+                });
+            });
+
+        // Close menu if clicked outside
+        if ctx.input(|i| i.pointer.any_click()) {
+            let area_rect = ctx.memory(|m| m.area_rect(egui::Id::new("context_menu")));
+            if let Some(rect) = area_rect {
+                if !rect.contains(ctx.input(|i| i.pointer.hover_pos().unwrap_or(egui::Pos2::ZERO))) {
+                    close_menu = true;
+                }
+            }
+        }
+
+        if close_menu {
+            self.context_menu.show = false;
+        }
+
+        if do_copy {
+            self.do_copy_selection(ctx);
+        }
+        if do_paste {
+            self.do_paste(ctx);
+        }
+        if do_clear {
+            self.do_clear_screen();
+        }
+        if do_split_h {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                let shell = if self.config.shell_path.is_empty() { None } else { Some(self.config.shell_path.as_str()) };
+                let _ = tab.layout.add_local_pane(SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines, shell);
+            }
+        }
+        if do_split_v {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                let shell = if self.config.shell_path.is_empty() { None } else { Some(self.config.shell_path.as_str()) };
+                let _ = tab.layout.add_local_pane(SplitDirection::Vertical, self.last_rows, self.last_cols, self.config.scrollback_lines, shell);
+            }
+        }
+    }
+
+    fn do_copy_selection(&mut self, ctx: &egui::Context) {
+        let text = self.tabs.get(self.active_tab).and_then(|t| {
+            let idx = t.layout.active_pane;
+            t.layout.panes.get(idx).and_then(|p| match &p.kind {
+                PaneKind::Terminal { terminal, .. } => terminal.selected_text(),
+                _ => None,
+            })
+        });
+        if let Some(text) = text {
+            ctx.output_mut(|o| o.copied_text = text);
+        }
+    }
+
+    fn do_paste(&mut self, ctx: &egui::Context) {
+        // Request the system to paste, which will generate an Event::Paste next frame
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+    }
+
+    fn do_clear_screen(&mut self) {
+        let tab = match self.tabs.get_mut(self.active_tab) {
+            Some(t) => t,
+            None => return,
+        };
+        let pane = match tab.layout.active_pane_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        match &mut pane.kind {
+            PaneKind::Terminal { terminal, backend } => {
+                for row in 0..terminal.rows() {
+                    terminal.grid.clear_row(row);
+                }
+                terminal.cursor.row = 0;
+                terminal.cursor.col = 0;
+                match backend {
+                    PaneBackend::Local(pty) => { let _ = pty.write(b"\x1b[2J\x1b[H"); }
+                    PaneBackend::Ssh(ssh) => { let _ = ssh.write(b"\x1b[2J\x1b[H"); }
+                }
+            }
+            PaneKind::Sftp { .. } => {}
+        }
+    }
+
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // Handle mouse events from terminal rendering
+        self.handle_terminal_mouse();
+
+        // Render context menu
+        self.render_context_menu(ctx);
+
         let tab = match self.tabs.get_mut(self.active_tab) {
             Some(t) => t,
             None => return,
@@ -803,12 +1170,49 @@ impl QTermApp {
                     for event in &i.events {
                         match event {
                             egui::Event::Text(text) => {
+                                // Skip if Ctrl is held (handled by key events)
+                                if i.modifiers.ctrl || i.modifiers.command {
+                                    continue;
+                                }
                                 match backend {
                                     PaneBackend::Local(pty) => { let _ = pty.write(text.as_bytes()); }
                                     PaneBackend::Ssh(ssh) => { let _ = ssh.write(text.as_bytes()); }
                                 }
                             }
+                            egui::Event::Paste(text) => {
+                                if !text.is_empty() {
+                                    match backend {
+                                        PaneBackend::Local(pty) => { let _ = pty.write(text.as_bytes()); }
+                                        PaneBackend::Ssh(ssh) => { let _ = ssh.write(text.as_bytes()); }
+                                    }
+                                }
+                            }
                             egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                                // Ctrl+C: copy selection or send SIGINT
+                                if *key == egui::Key::C && modifiers.ctrl && !modifiers.shift {
+                                    if let Some(text) = terminal.selected_text() {
+                                        ctx.output_mut(|o| o.copied_text = text);
+                                        terminal.selection = None;
+                                    } else {
+                                        match backend {
+                                            PaneBackend::Local(pty) => { let _ = pty.write(b"\x03"); }
+                                            PaneBackend::Ssh(ssh) => { let _ = ssh.write(b"\x03"); }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // Ctrl+Shift+C: force copy
+                                if *key == egui::Key::C && modifiers.ctrl && modifiers.shift {
+                                    if let Some(text) = terminal.selected_text() {
+                                        ctx.output_mut(|o| o.copied_text = text);
+                                    }
+                                    continue;
+                                }
+                                // Ctrl+V / Ctrl+Shift+V: request paste (will come as Event::Paste next frame)
+                                if *key == egui::Key::V && modifiers.ctrl {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                                    continue;
+                                }
                                 if let Some(seq) = key_to_seq(*key, *modifiers) {
                                     match backend {
                                         PaneBackend::Local(pty) => { let _ = pty.write(seq.as_bytes()); }
@@ -834,7 +1238,7 @@ impl QTermApp {
 }
 
 fn key_to_seq(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
-    if mods.ctrl {
+    if mods.ctrl && !mods.shift {
         let ctrl_char = match key {
             egui::Key::A => Some("\x01"), egui::Key::B => Some("\x02"),
             egui::Key::C => Some("\x03"), egui::Key::D => Some("\x04"),
