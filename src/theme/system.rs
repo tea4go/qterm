@@ -158,7 +158,7 @@ impl SystemTheme {
     /// Apply this SystemTheme to the egui global Style/Visuals.
     /// This ensures all built-in egui widgets (buttons, inputs, menus, etc.)
     /// automatically use our theme colors.
-    pub fn apply_to_egui(&self, ctx: &egui::Context, is_dark: bool) {
+    pub fn apply_to_egui(&self, ctx: &egui::Context, is_dark: bool, general_font_size: f32) {
         let mut style = (*ctx.style()).clone();
 
         // --- Visuals ---
@@ -268,13 +268,13 @@ impl SystemTheme {
         style.spacing.scroll.bar_outer_margin = 0.0;
 
         // --- Text Styles ---
-        let font_size = 13.0;
+        let font_size = general_font_size.max(11.0);
         let text_styles = [
-            (egui::TextStyle::Small, 11.0),
+            (egui::TextStyle::Small, (font_size - 2.0).max(9.0)),
             (egui::TextStyle::Body, font_size),
             (egui::TextStyle::Monospace, font_size),
             (egui::TextStyle::Button, font_size),
-            (egui::TextStyle::Heading, font_size + 5.0),
+            (egui::TextStyle::Heading, (font_size + 5.0).max(14.0)),
         ];
         for (style_text, size) in text_styles {
             style

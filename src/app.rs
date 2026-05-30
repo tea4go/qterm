@@ -1,5 +1,7 @@
+use std::path::PathBuf;
+
 use eframe::egui;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Preferences};
 use crate::connection::models::Connection;
 use crate::tab::Tab;
 use crate::terminal::renderer;
@@ -14,6 +16,7 @@ pub struct QTermApp {
     tabs: Vec<Tab>,
     active_tab: usize,
     config: AppConfig,
+    preferences: Preferences,
     theme: AppTheme,
     last_window_pos: Option<(f32, f32)>,
     last_window_size: Option<(f32, f32)>,
@@ -56,15 +59,18 @@ struct PendingMouse {
 
 impl QTermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
-        Self::configure_fonts(&cc.egui_ctx);
+        let preferences = Preferences::load();
+        Self::configure_fonts(&cc.egui_ctx, &preferences);
 
-        let is_dark = config.theme != "light";
+        let is_dark = preferences.theme != "light";
         let theme = if is_dark { AppTheme::dark() } else { AppTheme::light() };
-        theme.system.apply_to_egui(&cc.egui_ctx, is_dark);
+        let font_size = preferences.shell_font_size;
+        theme.system.apply_to_egui(&cc.egui_ctx, is_dark, preferences.general_font_size);
         let mut app = Self {
             tabs: Vec::new(),
             active_tab: 0,
             config,
+            preferences,
             theme,
             last_window_pos: None,
             last_window_size: None,
@@ -79,37 +85,86 @@ impl QTermApp {
             pending_mouse: None,
             connections: crate::connection::load_connections(),
         };
+        app.theme.terminal.font_size = font_size;
+        app.theme.terminal.font_bold = app.preferences.shell_font_bold;
+        app.config.font_size = font_size;
         app.new_tab();
         app
     }
 
-    fn configure_fonts(ctx: &egui::Context) {
+    fn configure_fonts(ctx: &egui::Context, prefs: &Preferences) {
         let mut fonts = egui::FontDefinitions::default();
-        let font_paths: Vec<&str> = if cfg!(target_os = "windows") {
-            vec![
-                "C:\\Windows\\Fonts\\msyh.ttc",
-                "C:\\Windows\\Fonts\\consola.ttf",
-            ]
+
+        // Collect all unique font family names across all sections
+        let mut all_families: Vec<String> = Vec::new();
+        for name in &prefs.config_font_family {
+            if !all_families.contains(name) {
+                all_families.push(name.clone());
+            }
+        }
+        for name in &prefs.general_font_family {
+            if !all_families.contains(name) {
+                all_families.push(name.clone());
+            }
+        }
+        for name in &prefs.shell_font_family {
+            if !all_families.contains(name) {
+                all_families.push(name.clone());
+            }
+        }
+
+        // Load configured fonts
+        for name in &all_families {
+            for path in find_font_paths(name) {
+                if let Ok(data) = std::fs::read(&path) {
+                    fonts.font_data.insert(
+                        path.clone(),
+                        egui::FontData::from_owned(data).into(),
+                    );
+                    fonts.families.entry(egui::FontFamily::Proportional).or_default().push(path.clone());
+                    fonts.families.entry(egui::FontFamily::Monospace).or_default().push(path.clone());
+                    break;
+                }
+            }
+        }
+
+        // Fallback system fonts (CJK + monospace)
+        let fallback_paths: Vec<&str> = if cfg!(target_os = "windows") {
+            vec!["C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\consola.ttf"]
         } else if cfg!(target_os = "macos") {
             vec!["/System/Library/Fonts/PingFang.ttc"]
         } else {
             vec!["/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"]
         };
 
-        for path in font_paths {
+        for path in fallback_paths {
+            if fonts.font_data.contains_key(path) {
+                continue;
+            }
             if let Ok(data) = std::fs::read(path) {
                 fonts.font_data.insert(
                     path.to_string(),
                     egui::FontData::from_owned(data).into(),
                 );
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push(path.to_string());
+                fonts.families.entry(egui::FontFamily::Proportional).or_default().push(path.to_string());
+                fonts.families.entry(egui::FontFamily::Monospace).or_default().push(path.to_string());
             }
         }
+
         ctx.set_fonts(fonts);
+    }
+
+    fn config_font_id(&self) -> egui::FontId {
+        egui::FontId::proportional(self.preferences.config_font_size)
+    }
+
+    fn general_font_id(&self, size: Option<f32>) -> egui::FontId {
+        let sz = size.unwrap_or(self.preferences.general_font_size);
+        egui::FontId::proportional(sz)
+    }
+
+    fn shell_font_id(&self) -> egui::FontId {
+        egui::FontId::monospace(self.preferences.shell_font_size)
     }
 
     fn new_tab(&mut self) {
@@ -138,6 +193,48 @@ impl QTermApp {
             }
         }
     }
+}
+
+fn find_font_paths(name: &str) -> Vec<String> {
+    let lower = name.to_lowercase();
+    let base = lower.replace(' ', "");
+    let mut paths = Vec::new();
+
+    if cfg!(target_os = "windows") {
+        let font_dir = "C:\\Windows\\Fonts\\";
+        let user_font_dir = std::env::var_os("LOCALAPPDATA")
+            .map(|p| PathBuf::from(p).join("Fonts").to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        for ext in &["ttf", "ttc", "otf"] {
+            paths.push(format!("{}{}.{}", font_dir, base, ext));
+            paths.push(format!("{}{}bd.{}", font_dir, base, ext));
+            paths.push(format!("{}{}bold.{}", font_dir, base, ext));
+        }
+        if !user_font_dir.is_empty() {
+            for ext in &["ttf", "ttc", "otf"] {
+                paths.push(format!("{}\\{}.{}", user_font_dir, base, ext));
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        for dir in &["/System/Library/Fonts/", "/Library/Fonts/"] {
+            for ext in &["ttf", "ttc", "otf"] {
+                paths.push(format!("{}{}.{}", dir, base, ext));
+            }
+        }
+    } else {
+        for dir in &[
+            "/usr/share/fonts/truetype/",
+            "/usr/share/fonts/opentype/",
+            "/usr/local/share/fonts/",
+        ] {
+            for ext in &["ttf", "ttc", "otf"] {
+                paths.push(format!("{}{}.{}", dir, base, ext));
+            }
+        }
+    }
+
+    paths
 }
 
 impl eframe::App for QTermApp {
@@ -238,12 +335,12 @@ impl eframe::App for QTermApp {
             Some(Action::FontZoomIn) => {
                 self.config.font_size = (self.config.font_size + 1.0).min(30.0);
                 self.theme.terminal.font_size = self.config.font_size;
-                Self::configure_fonts(ctx);
+                Self::configure_fonts(ctx, &self.preferences);
             }
             Some(Action::FontZoomOut) => {
                 self.config.font_size = (self.config.font_size - 1.0).max(11.0);
                 self.theme.terminal.font_size = self.config.font_size;
-                Self::configure_fonts(ctx);
+                Self::configure_fonts(ctx, &self.preferences);
             }
             None => {}
         }
@@ -631,7 +728,7 @@ impl QTermApp {
                         ).frame(false).min_size(egui::vec2(30.0, 30.0))
                          .rounding(egui::Rounding::same(4.0))).clicked() {
                             self.theme.toggle_mode();
-                            self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark());
+                            self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
                         }
                         ui.add_space(2.0);
                     });
@@ -818,7 +915,7 @@ impl QTermApp {
             let label = if is_dark { "Switch to Light" } else { "Switch to Dark" };
             if ui.button(label).clicked() {
                 self.theme.toggle_mode();
-                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark());
+                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
             }
         });
     }

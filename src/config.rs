@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::Deserialize;
+
 fn config_dir() -> PathBuf {
     #[cfg(windows)]
     {
@@ -127,4 +129,131 @@ fn parse_ini(content: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+// ==================== WhaleTerm preferences.json ====================
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct PreferencesFile {
+    config: ConfigSection,
+    general: GeneralSection,
+    shell: ShellSection,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ConfigSection {
+    default_font_family: Vec<String>,
+    default_font_size: f32,
+    default_font_bold: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct GeneralSection {
+    font_family: Vec<String>,
+    font_size: f32,
+    font_bold: String,
+    theme: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ShellSection {
+    font_family: Vec<String>,
+    font_size: f32,
+    font_bold: String,
+}
+
+fn preferences_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return PathBuf::from(appdata).join("WhaleTerm").join("preferences.json");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".config")
+                .join("WhaleTerm")
+                .join("preferences.json");
+        }
+    }
+    PathBuf::from("preferences.json")
+}
+
+#[derive(Clone)]
+pub struct Preferences {
+    pub config_font_family: Vec<String>,
+    pub config_font_size: f32,
+    pub config_font_bold: bool,
+    pub general_font_family: Vec<String>,
+    pub general_font_size: f32,
+    pub general_font_bold: bool,
+    pub shell_font_family: Vec<String>,
+    pub shell_font_size: f32,
+    pub shell_font_bold: bool,
+    pub theme: String,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            config_font_family: vec![],
+            config_font_size: 14.0,
+            config_font_bold: false,
+            general_font_family: vec![],
+            general_font_size: 14.0,
+            general_font_bold: false,
+            shell_font_family: vec![],
+            shell_font_size: 14.0,
+            shell_font_bold: false,
+            theme: "dark".to_string(),
+        }
+    }
+}
+
+impl Preferences {
+    pub fn load() -> Self {
+        let path = preferences_path();
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return Self::default(),
+        };
+        let pf: PreferencesFile = match serde_json::from_str(&content) {
+            Ok(p) => p,
+            Err(_) => return Self::default(),
+        };
+        Self {
+            config_font_family: pf.config.default_font_family,
+            config_font_size: if pf.config.default_font_size > 0.0 {
+                pf.config.default_font_size
+            } else {
+                14.0
+            },
+            config_font_bold: pf.config.default_font_bold == "bold",
+            general_font_family: pf.general.font_family,
+            general_font_size: if pf.general.font_size > 0.0 {
+                pf.general.font_size
+            } else {
+                14.0
+            },
+            general_font_bold: pf.general.font_bold == "bold",
+            shell_font_family: pf.shell.font_family,
+            shell_font_size: if pf.shell.font_size > 0.0 {
+                pf.shell.font_size
+            } else {
+                14.0
+            },
+            shell_font_bold: pf.shell.font_bold == "bold",
+            theme: if pf.general.theme.is_empty() {
+                "dark".to_string()
+            } else {
+                pf.general.theme
+            },
+        }
+    }
 }

@@ -4,6 +4,7 @@ use super::parse_color;
 
 pub struct TerminalTheme {
     pub font_size: f32,
+    pub font_bold: bool,
     pub background: egui::Color32,
     pub foreground: egui::Color32,
     pub cursor: egui::Color32,
@@ -18,6 +19,7 @@ impl TerminalTheme {
     pub fn dark() -> Self {
         Self {
             font_size: 14.0,
+            font_bold: false,
             background: parse_color("#002B36"),
             foreground: parse_color("#839496"),
             cursor: parse_color("#93A1A1"),
@@ -49,6 +51,7 @@ impl TerminalTheme {
     pub fn light() -> Self {
         Self {
             font_size: 14.0,
+            font_bold: false,
             background: parse_color("#FFFFFF"),
             foreground: parse_color("#333333"),
             cursor: parse_color("#333333"),
