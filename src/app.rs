@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 use crate::tab::Tab;
 use crate::terminal::renderer;
 use crate::theme::TermTheme;
+use crate::ui::split_pane::SplitDirection;
 
 
 pub struct QTermApp {
@@ -115,13 +116,31 @@ impl eframe::App for QTermApp {
         // Handle global shortcuts
         let mut action = None;
         ctx.input(|i| {
+            if i.key_pressed(egui::Key::H) && i.modifiers.ctrl && i.modifiers.shift {
+                action = Some(Action::SplitHorizontal);
+            }
+            if i.key_pressed(egui::Key::V) && i.modifiers.ctrl && i.modifiers.shift {
+                action = Some(Action::SplitVertical);
+            }
+            if i.key_pressed(egui::Key::W) && i.modifiers.ctrl && i.modifiers.shift {
+                action = Some(Action::ClosePane);
+            }
+            if i.key_pressed(egui::Key::N) && i.modifiers.ctrl && i.modifiers.shift {
+                action = Some(Action::OpenSshDialog);
+            }
+            if i.key_pressed(egui::Key::ArrowRight) && i.modifiers.ctrl && !i.modifiers.shift {
+                action = Some(Action::NextPane);
+            }
+            if i.key_pressed(egui::Key::ArrowDown) && i.modifiers.ctrl && !i.modifiers.shift {
+                action = Some(Action::NextPane);
+            }
             if i.key_pressed(egui::Key::T)
                 && i.modifiers.ctrl
                 && !i.modifiers.shift
             {
                 action = Some(Action::NewTab);
             }
-            if i.key_pressed(egui::Key::W) && i.modifiers.ctrl {
+            if i.key_pressed(egui::Key::W) && i.modifiers.ctrl && !i.modifiers.shift {
                 action = Some(Action::CloseTab);
             }
             if i.key_pressed(egui::Key::Tab) && i.modifiers.ctrl {
@@ -138,6 +157,35 @@ impl eframe::App for QTermApp {
                 if !self.tabs.is_empty() {
                     self.active_tab = (self.active_tab + 1) % self.tabs.len();
                 }
+            }
+            Some(Action::SplitHorizontal) => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let shell = if self.config.shell_path.is_empty() { None } else { Some(self.config.shell_path.as_str()) };
+                    let _ = tab.layout.add_local_pane(SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines, shell);
+                }
+            }
+            Some(Action::SplitVertical) => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let shell = if self.config.shell_path.is_empty() { None } else { Some(self.config.shell_path.as_str()) };
+                    let _ = tab.layout.add_local_pane(SplitDirection::Vertical, self.last_rows, self.last_cols, self.config.scrollback_lines, shell);
+                }
+            }
+            Some(Action::NextPane) => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let count = tab.layout.pane_count();
+                    if count > 0 {
+                        tab.layout.active_pane = (tab.layout.active_pane + 1) % count;
+                    }
+                }
+            }
+            Some(Action::ClosePane) => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let idx = tab.layout.active_pane;
+                    tab.layout.remove_pane(idx);
+                }
+            }
+            Some(Action::OpenSshDialog) => {
+                // Will be implemented in task 7
             }
             None => {}
         }
@@ -177,22 +225,69 @@ impl eframe::App for QTermApp {
                     return;
                 }
 
-                // Calculate terminal size from available space
-                let size = renderer::calculate_size(ui, self.theme.font_size);
-                if size.rows != self.last_rows || size.cols != self.last_cols {
-                    self.last_rows = size.rows;
-                    self.last_cols = size.cols;
-                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                        if let Some(pane) = tab.layout.active_pane_mut() {
-                            pane.resize(size.rows, size.cols);
+                let tab = &self.tabs[self.active_tab];
+                let pane_count = tab.layout.pane_count();
+
+                if pane_count <= 1 {
+                    // Single pane: full screen render
+                    let size = renderer::calculate_size(ui, self.theme.font_size);
+                    if size.rows != self.last_rows || size.cols != self.last_cols {
+                        self.last_rows = size.rows;
+                        self.last_cols = size.cols;
+                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                            if let Some(pane) = tab.layout.active_pane_mut() {
+                                pane.resize(size.rows, size.cols);
+                            }
                         }
                     }
-                }
-
-                // Render terminal
-                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    let tab = &self.tabs[self.active_tab];
                     if let Some(pane) = tab.layout.active_pane() {
                         renderer::render(ui, &pane.terminal, &self.theme);
+                    }
+                } else {
+                    // Multi-pane split rendering
+                    let active_idx = tab.layout.active_pane;
+                    match tab.layout.direction {
+                        SplitDirection::Horizontal => {
+                            let available_height = ui.available_height();
+                            let pane_height = available_height / pane_count as f32;
+                            for (idx, pane) in tab.layout.panes.iter().enumerate() {
+                                let is_active = idx == active_idx;
+                                let stroke = if is_active {
+                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
+                                } else {
+                                    egui::Stroke::NONE
+                                };
+                                egui::Frame::none()
+                                    .fill(self.theme.background)
+                                    .stroke(stroke)
+                                    .show(ui, |ui| {
+                                        ui.set_max_height(pane_height - 2.0);
+                                        renderer::render(ui, &pane.terminal, &self.theme);
+                                    });
+                            }
+                        }
+                        SplitDirection::Vertical => {
+                            let available_width = ui.available_width();
+                            let pane_width = available_width / pane_count as f32;
+                            ui.horizontal(|ui| {
+                                for (idx, pane) in tab.layout.panes.iter().enumerate() {
+                                    let is_active = idx == active_idx;
+                                    let stroke = if is_active {
+                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
+                                    } else {
+                                        egui::Stroke::NONE
+                                    };
+                                    egui::Frame::none()
+                                        .fill(self.theme.background)
+                                        .stroke(stroke)
+                                        .show(ui, |ui| {
+                                            ui.set_max_width(pane_width - 2.0);
+                                            renderer::render(ui, &pane.terminal, &self.theme);
+                                        });
+                                }
+                            });
+                        }
                     }
                 }
             });
@@ -220,6 +315,11 @@ enum Action {
     NewTab,
     CloseTab,
     NextTab,
+    SplitHorizontal,
+    SplitVertical,
+    NextPane,
+    ClosePane,
+    OpenSshDialog,
 }
 
 impl QTermApp {
