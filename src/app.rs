@@ -17,6 +17,7 @@ pub struct QTermApp {
     last_maximized: bool,
     last_cols: usize,
     last_rows: usize,
+    ssh_dialog: crate::ui::ssh_dialog::SshDialog,
 }
 
 impl QTermApp {
@@ -34,6 +35,7 @@ impl QTermApp {
             last_maximized: false,
             last_cols: 80,
             last_rows: 24,
+            ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
         };
         app.new_tab();
         app
@@ -185,7 +187,7 @@ impl eframe::App for QTermApp {
                 }
             }
             Some(Action::OpenSshDialog) => {
-                // Will be implemented in task 7
+                self.ssh_dialog.open = true;
             }
             None => {}
         }
@@ -291,6 +293,19 @@ impl eframe::App for QTermApp {
                     }
                 }
             });
+
+        // Show SSH dialog
+        self.ssh_dialog.show(ctx);
+
+        // Handle SSH dialog result
+        if let Some(config) = self.ssh_dialog.result.take() {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if let Err(e) = tab.layout.add_ssh_pane(config, SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines) {
+                    self.ssh_dialog.status = Some(format!("SSH error: {}", e));
+                    self.ssh_dialog.open = true;
+                }
+            }
+        }
 
         // Handle keyboard input via raw events
         self.handle_input(ctx);
