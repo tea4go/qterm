@@ -5,6 +5,7 @@ use crate::tab::Tab;
 use crate::terminal::renderer;
 use crate::theme::TermTheme;
 
+
 pub struct QTermApp {
     tabs: Vec<Tab>,
     active_tab: usize,
@@ -72,7 +73,7 @@ impl QTermApp {
         } else {
             Some(self.config.shell_path.as_str())
         };
-        match Tab::new(self.last_rows, self.last_cols, self.config.scrollback_lines, shell) {
+        match Tab::new_local(self.last_rows, self.last_cols, self.config.scrollback_lines, shell) {
             Ok(tab) => {
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
@@ -147,7 +148,7 @@ impl eframe::App for QTermApp {
                 let mut close_idx = None;
                 for (idx, tab) in self.tabs.iter().enumerate() {
                     let selected = idx == self.active_tab;
-                    let label = if tab.alive { &tab.title } else { "[closed]" };
+                    let label = if tab.alive() { &tab.title } else { "[closed]" };
                     if ui.selectable_label(selected, label).clicked() {
                         self.active_tab = idx;
                     }
@@ -182,14 +183,17 @@ impl eframe::App for QTermApp {
                     self.last_rows = size.rows;
                     self.last_cols = size.cols;
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                        tab.terminal.resize(size.rows, size.cols);
-                        tab.pty.resize(size.rows as u16, size.cols as u16);
+                        if let Some(pane) = tab.layout.active_pane_mut() {
+                            pane.resize(size.rows, size.cols);
+                        }
                     }
                 }
 
                 // Render terminal
                 if let Some(tab) = self.tabs.get(self.active_tab) {
-                    renderer::render(ui, &tab.terminal, &self.theme);
+                    if let Some(pane) = tab.layout.active_pane() {
+                        renderer::render(ui, &pane.terminal, &self.theme);
+                    }
                 }
             });
 
@@ -224,6 +228,10 @@ impl QTermApp {
             Some(t) => t,
             None => return,
         };
+        let pane = match tab.layout.active_pane_mut() {
+            Some(p) => p,
+            None => return,
+        };
 
         // Ensure no widget steals keyboard focus from the terminal
         if ctx.memory(|m| m.focused().is_some()) {
@@ -234,7 +242,7 @@ impl QTermApp {
             for event in &i.events {
                 match event {
                     egui::Event::Text(text) => {
-                        let _ = tab.pty.write(text.as_bytes());
+                        pane.write(text.as_bytes());
                     }
                     egui::Event::Key {
                         key,
@@ -243,7 +251,7 @@ impl QTermApp {
                         ..
                     } => {
                         if let Some(seq) = key_to_seq(*key, *modifiers) {
-                            let _ = tab.pty.write(seq.as_bytes());
+                            pane.write(seq.as_bytes());
                         }
                     }
                     _ => {}
