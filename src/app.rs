@@ -8,40 +8,45 @@ use crate::terminal::renderer;
 use crate::theme::AppTheme;
 use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
 
-const TITLE_BAR_HEIGHT: f32 = 40.0;
-const RIBBON_WIDTH: f32 = 50.0;
-const LEFT_PANE_WIDTH: f32 = 220.0;
+// UI 常量尺寸
+const TITLE_BAR_HEIGHT: f32 = 40.0;  // 标题栏高度
+const RIBBON_WIDTH: f32 = 50.0;       // 左侧图标栏宽度
+const LEFT_PANE_WIDTH: f32 = 220.0;   // 左侧面板宽度
 
+/// QTerm 应用主结构体
+/// 管理 UI 状态、标签页、配置、主题、SSH对话框等
 pub struct QTermApp {
-    tabs: Vec<Tab>,
-    active_tab: usize,
-    config: AppConfig,
-    preferences: Preferences,
-    theme: AppTheme,
-    last_window_pos: Option<(f32, f32)>,
-    last_window_size: Option<(f32, f32)>,
-    last_maximized: bool,
-    last_cols: usize,
-    last_rows: usize,
-    ssh_dialog: crate::ui::ssh_dialog::SshDialog,
-    sftp_error: Option<String>,
-    show_left_pane: bool,
-    ribbon_active: RibbonSection,
-    context_menu: ContextMenu,
-    pending_mouse: Option<PendingMouse>,
-    connections: Vec<Connection>,
+    tabs: Vec<Tab>,                       // 标签页列表
+    active_tab: usize,                    // 当前活动标签页索引
+    config: AppConfig,                    // 应用配置
+    preferences: Preferences,             // 偏好设置（字体、主题）
+    theme: AppTheme,                      // 当前主题
+    last_window_pos: Option<(f32, f32)>,  // 上次窗口位置
+    last_window_size: Option<(f32, f32)>, // 上次窗口尺寸
+    last_maximized: bool,                 // 上次最大化状态
+    last_cols: usize,                     // 上次终端列数
+    last_rows: usize,                     // 上次终端行数
+    ssh_dialog: crate::ui::ssh_dialog::SshDialog,  // SSH 连接对话框
+    sftp_error: Option<String>,           // SFTP 错误信息
+    show_left_pane: bool,                 // 是否显示左侧面板
+    ribbon_active: RibbonSection,         // 当前活动功能区
+    context_menu: ContextMenu,            // 右键上下文菜单
+    pending_mouse: Option<PendingMouse>,  // 待处理的鼠标事件
+    connections: Vec<Connection>,          // WhaleTerm 连接列表
 }
 
+/// 左侧功能区类型
 #[derive(Clone, Copy, PartialEq)]
 enum RibbonSection {
-    Terminal,
-    Sftp,
-    Settings,
+    Terminal,   // 终端区
+    Sftp,       // SFTP 区
+    Settings,   // 设置区
 }
 
+/// 右键上下文菜单状态
 struct ContextMenu {
-    show: bool,
-    pos: egui::Pos2,
+    show: bool,       // 是否显示菜单
+    pos: egui::Pos2,  // 菜单显示位置
 }
 
 impl Default for ContextMenu {
@@ -50,18 +55,23 @@ impl Default for ContextMenu {
     }
 }
 
+/// 待处理的鼠标事件数据
+/// 用于终端区域的拖拽选择和双击选择等交互
 struct PendingMouse {
-    response: egui::Response,
-    cell_width: f32,
-    cell_height: f32,
-    origin: egui::Pos2,
+    response: egui::Response,   // 鼠标响应对象
+    cell_width: f32,            // 单元格宽度
+    cell_height: f32,           // 单元格高度
+    origin: egui::Pos2,        // 绘制起点坐标
 }
 
 impl QTermApp {
+    /// 创建 QTermApp 实例
+    /// 初始化字体、主题、偏好设置，创建第一个本地终端标签页
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         let preferences = Preferences::load();
         Self::configure_fonts(&cc.egui_ctx, &preferences);
 
+        // 根据偏好设置确定主题模式
         let is_dark = preferences.theme != "light";
         let theme = if is_dark { AppTheme::dark() } else { AppTheme::light() };
         let font_size = preferences.shell_font_size;
@@ -85,17 +95,21 @@ impl QTermApp {
             pending_mouse: None,
             connections: crate::connection::load_connections(),
         };
+        // 设置终端字体大小和粗体
         app.theme.terminal.font_size = font_size;
         app.theme.terminal.font_bold = app.preferences.shell_font_bold;
         app.config.font_size = font_size;
+        // 创建初始本地终端标签页
         app.new_tab();
         app
     }
 
+    /// 配置 egui 字体系统
+    /// 加载用户配置的字体族和系统回退字体（CJK + 等宽）
     fn configure_fonts(ctx: &egui::Context, prefs: &Preferences) {
         let mut fonts = egui::FontDefinitions::default();
 
-        // Collect all unique font family names across all sections
+        // 收集所有唯一字体族名称（跨三个配置区域）
         let mut all_families: Vec<String> = Vec::new();
         for name in &prefs.config_font_family {
             if !all_families.contains(name) {
@@ -113,7 +127,7 @@ impl QTermApp {
             }
         }
 
-        // Load configured fonts
+        // 加载用户配置的字体文件
         for name in &all_families {
             for path in find_font_paths(name) {
                 if let Ok(data) = std::fs::read(&path) {
@@ -121,6 +135,7 @@ impl QTermApp {
                         path.clone(),
                         egui::FontData::from_owned(data).into(),
                     );
+                    // 同时注册到比例字体和等宽字体族
                     fonts.families.entry(egui::FontFamily::Proportional).or_default().push(path.clone());
                     fonts.families.entry(egui::FontFamily::Monospace).or_default().push(path.clone());
                     break;
@@ -128,7 +143,7 @@ impl QTermApp {
             }
         }
 
-        // Fallback system fonts (CJK + monospace)
+        // 系统回退字体路径（CJK 支持 + 等宽字体）
         let fallback_paths: Vec<&str> = if cfg!(target_os = "windows") {
             vec!["C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\consola.ttf"]
         } else if cfg!(target_os = "macos") {
@@ -137,6 +152,7 @@ impl QTermApp {
             vec!["/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"]
         };
 
+        // 加载回退字体（避免重复加载）
         for path in fallback_paths {
             if fonts.font_data.contains_key(path) {
                 continue;
@@ -154,19 +170,23 @@ impl QTermApp {
         ctx.set_fonts(fonts);
     }
 
+    /// 获取配置区字体 ID
     fn config_font_id(&self) -> egui::FontId {
         egui::FontId::proportional(self.preferences.config_font_size)
     }
 
+    /// 获取通用字体 ID（可指定大小）
     fn general_font_id(&self, size: Option<f32>) -> egui::FontId {
         let sz = size.unwrap_or(self.preferences.general_font_size);
         egui::FontId::proportional(sz)
     }
 
+    /// 获取终端字体 ID（等宽字体）
     fn shell_font_id(&self) -> egui::FontId {
         egui::FontId::monospace(self.preferences.shell_font_size)
     }
 
+    /// 创建新的本地终端标签页
     fn new_tab(&mut self) {
         let shell = if self.config.shell_path.is_empty() {
             None
@@ -179,11 +199,12 @@ impl QTermApp {
                 self.active_tab = self.tabs.len() - 1;
             }
             Err(e) => {
-                eprintln!("Failed to create tab: {}", e);
+                eprintln!("创建标签页失败: {}", e);
             }
         }
     }
 
+    /// 关闭指定索引的标签页
     fn close_tab(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.tabs[idx].close();
@@ -195,6 +216,8 @@ impl QTermApp {
     }
 }
 
+/// 根据字体名称查找系统字体文件路径
+/// 支持 Windows、macOS、Linux 三平台的字体目录
 fn find_font_paths(name: &str) -> Vec<String> {
     let lower = name.to_lowercase();
     let base = lower.replace(' ', "");
@@ -202,10 +225,12 @@ fn find_font_paths(name: &str) -> Vec<String> {
 
     if cfg!(target_os = "windows") {
         let font_dir = "C:\\Windows\\Fonts\\";
+        // 用户字体目录（%LOCALAPPDATA%\Fonts）
         let user_font_dir = std::env::var_os("LOCALAPPDATA")
             .map(|p| PathBuf::from(p).join("Fonts").to_string_lossy().to_string())
             .unwrap_or_default();
 
+        // 尝试多种扩展名和粗体变体
         for ext in &["ttf", "ttc", "otf"] {
             paths.push(format!("{}{}.{}", font_dir, base, ext));
             paths.push(format!("{}{}bd.{}", font_dir, base, ext));
@@ -237,12 +262,33 @@ fn find_font_paths(name: &str) -> Vec<String> {
     paths
 }
 
+/// 用户操作类型枚举
+/// 用于处理全局快捷键映射
+enum Action {
+    NewTab,           // 新建标签页
+    CloseTab,         // 关闭标签页
+    NextTab,          // 切换到下一个标签页
+    SplitHorizontal,  // 水平分屏
+    SplitVertical,    // 垂直分屏
+    NextPane,         // 切换到下一个面板
+    ClosePane,        // 关闭活动面板
+    OpenSshDialog,    // 打开 SSH 连接对话框
+    OpenSftp,         // 打开 SFTP
+    ToggleLeftPane,   // 切换左侧面板显示
+    FontZoomIn,       // 字体放大
+    FontZoomOut,      // 字体缩小
+}
+
+// ==================== eframe::App 实现 ====================
+
 impl eframe::App for QTermApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 轮询所有标签页（读取终端输出数据）
         for tab in &mut self.tabs {
             tab.poll();
         }
 
+        // 记录窗口位置和尺寸
         ctx.input(|i| {
             if let Some(rect) = i.viewport().inner_rect {
                 self.last_window_size = Some((rect.width(), rect.height()));
@@ -252,7 +298,7 @@ impl eframe::App for QTermApp {
             }
         });
 
-        // Handle global shortcuts
+        // 处理全局快捷键
         let mut action = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::H) && i.modifiers.ctrl && i.modifiers.shift {
@@ -295,6 +341,7 @@ impl eframe::App for QTermApp {
                 action = Some(Action::FontZoomOut);
             }
         });
+        // 执行快捷键对应的操作
         match action {
             Some(Action::NewTab) => self.new_tab(),
             Some(Action::CloseTab) => { let idx = self.active_tab; self.close_tab(idx); }
@@ -345,10 +392,10 @@ impl eframe::App for QTermApp {
             None => {}
         }
 
-        // === Title Bar (40px) ===
+        // === 标题栏渲染（40px） ===
         self.render_title_bar(ctx);
 
-        // === Left SidePanel: Ribbon + LeftPane ===
+        // === 左侧面板：图标栏 + 连接列表 ===
         let left_total = if self.show_left_pane {
             RIBBON_WIDTH + LEFT_PANE_WIDTH
         } else {
@@ -366,26 +413,28 @@ impl eframe::App for QTermApp {
                 });
             });
 
-        // === FootBar (status bar) ===
+        // === 底部状态栏 ===
         self.render_foot_bar(ctx);
 
-        // === Central panel: terminal ===
+        // === 中央面板：终端区域 ===
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(self.theme.system.app_content_term_bg_color))
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Press Ctrl+T to open a new terminal");
+                        ui.label("按 Ctrl+T 打开新终端");
                     });
                     return;
                 }
 
+                // 计算当前活动标签页的面板数和终端尺寸
                 let pane_count = {
                     let tab = &self.tabs[self.active_tab];
                     tab.layout.pane_count()
                 };
 
                 let size = renderer::calculate_size(ui, self.theme.terminal.font_size);
+                // 根据分屏方向计算每个面板的目标行数和列数
                 let (target_rows, target_cols) = if pane_count <= 1 {
                     (size.rows, size.cols)
                 } else {
@@ -395,6 +444,7 @@ impl eframe::App for QTermApp {
                         SplitDirection::Vertical => (size.rows, (size.cols / pane_count).max(1)),
                     }
                 };
+                // 尺寸变化时调整所有面板的终端大小
                 if target_rows != self.last_rows || target_cols != self.last_cols {
                     self.last_rows = target_rows;
                     self.last_cols = target_cols;
@@ -405,8 +455,10 @@ impl eframe::App for QTermApp {
                     }
                 }
 
+                // 渲染终端面板内容
                 let tab = &mut self.tabs[self.active_tab];
                 if pane_count <= 1 {
+                    // 单面板模式
                     if let Some(pane) = tab.layout.active_pane_mut() {
                         match &mut pane.kind {
                             PaneKind::Terminal { terminal, .. } => {
@@ -424,13 +476,16 @@ impl eframe::App for QTermApp {
                         }
                     }
                 } else {
+                    // 多面板分屏模式
                     let active_idx = tab.layout.active_pane;
                     match tab.layout.direction {
                         SplitDirection::Horizontal => {
+                            // 水平分屏：上下排列
                             let available_height = ui.available_height();
                             let pane_height = available_height / pane_count as f32;
                             for (idx, pane) in tab.layout.panes.iter_mut().enumerate() {
                                 let is_active = idx == active_idx;
+                                // 活动面板显示边框高亮
                                 let stroke = if is_active {
                                     egui::Stroke::new(1.0, self.theme.system.text_active_color)
                                 } else {
@@ -461,6 +516,7 @@ impl eframe::App for QTermApp {
                             }
                         }
                         SplitDirection::Vertical => {
+                            // 垂直分屏：左右排列
                             let available_width = ui.available_width();
                             let pane_width = available_width / pane_count as f32;
                             ui.horizontal(|ui| {
@@ -500,21 +556,25 @@ impl eframe::App for QTermApp {
                 }
             });
 
+        // 显示 SSH 连接对话框
         self.ssh_dialog.show(ctx);
 
+        // 处理 SSH 连接结果
         if let Some(config) = self.ssh_dialog.result.take() {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 if let Err(e) = tab.layout.add_ssh_pane(config, SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines) {
-                    self.ssh_dialog.status = Some(format!("SSH error: {}", e));
+                    self.ssh_dialog.status = Some(format!("SSH 错误: {}", e));
                     self.ssh_dialog.open = true;
                 }
             }
         }
 
+        // 处理用户输入（键盘、鼠标）
         self.handle_input(ctx);
         ctx.request_repaint();
     }
 
+    /// 应用退出时保存配置并关闭所有标签页
     fn on_exit(&mut self) {
         self.config.window_x = self.last_window_pos.map(|(x, _)| x);
         self.config.window_y = self.last_window_pos.map(|(_, y)| y);
@@ -528,24 +588,11 @@ impl eframe::App for QTermApp {
     }
 }
 
-enum Action {
-    NewTab,
-    CloseTab,
-    NextTab,
-    SplitHorizontal,
-    SplitVertical,
-    NextPane,
-    ClosePane,
-    OpenSshDialog,
-    OpenSftp,
-    ToggleLeftPane,
-    FontZoomIn,
-    FontZoomOut,
-}
-
-// ==================== Title Bar ====================
+// ==================== 标题栏渲染 ====================
 
 impl QTermApp {
+    /// 渲染自定义标题栏
+    /// 包含：窗口拖拽区、标签页列表、窗口控制按钮（最小化/最大化/关闭）
     fn render_title_bar(&mut self, ctx: &egui::Context) {
         let title_bar_h = TITLE_BAR_HEIGHT;
         let app_bg = self.theme.system.app_bg_color;
@@ -560,7 +607,7 @@ impl QTermApp {
             .frame(egui::Frame::none().fill(app_bg))
             .exact_height(title_bar_h)
             .show(ctx, |ui| {
-                // Drag area for window movement
+                // 窗口拖拽区域（双击切换最大化）
                 let title_bar_response = ui.interact(
                     ui.max_rect(),
                     egui::Id::new("title_bar_drag"),
@@ -574,7 +621,7 @@ impl QTermApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
 
-                // Minimize / Maximize / Close buttons (top-right)
+                // 最小化 / 最大化 / 关闭按钮（右上角）
                 let btn_w = 40.0;
                 let btn_h = title_bar_h;
                 let total_btn_w = btn_w * 3.0;
@@ -583,18 +630,18 @@ impl QTermApp {
                     egui::vec2(total_btn_w, btn_h),
                 );
 
-                // Title + Tabs (left side)
+                // 左侧：标题 + 标签页
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text));
                     ui.add_space(16.0);
 
-                    // Card-style tabs
+                    // 卡片风格标签页
                     let mut close_idx = None;
                     let tab_h = title_bar_h - 6.0;
                     for (idx, tab) in self.tabs.iter().enumerate() {
                         let selected = idx == self.active_tab;
-                        let label = if tab.alive() { &tab.title } else { "[closed]" };
+                        let label = if tab.alive() { &tab.title } else { "[已关闭]" };
 
                         let (text_color, bg_color) = if selected {
                             (text_active, hover_bg)
@@ -613,6 +660,7 @@ impl QTermApp {
                                 ui.add_space(5.0);
                                 ui.label(egui::RichText::new(label).color(text_color).size(13.0));
                                 ui.add_space(4.0);
+                                // 关闭标签按钮
                                 let close_btn = ui.add(egui::Button::new(
                                     egui::RichText::new("x").size(11.0).color(text_color),
                                 ).frame(false).min_size(egui::vec2(30.0, 20.0)));
@@ -623,13 +671,14 @@ impl QTermApp {
                             });
                         });
 
+                        // 点击标签页切换活动标签
                         if inner.response.clicked() {
                             self.active_tab = idx;
                         }
                         ui.add_space(1.0);
                     }
 
-                    // "+" button
+                    // "+" 新建标签按钮
                     if ui.add(egui::Button::new(
                         egui::RichText::new("+").size(16.0).color(side_text),
                     ).frame(false)).clicked() {
@@ -641,17 +690,17 @@ impl QTermApp {
                     }
                 });
 
-                // Window control buttons (absolute positioned top-right)
+                // 窗口控制按钮（右上角绝对定位）
                 use egui::ViewportCommand;
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right_rect), |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        // Minimize
+                        // 最小化按钮
                         if ui.add(egui::Button::new(
                             egui::RichText::new("-").size(13.0).color(text_color),
                         ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
                             ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                         }
-                        // Maximize
+                        // 最大化/还原按钮
                         let max_icon = if self.last_maximized { "❐" } else { "O" };
                         if ui.add(egui::Button::new(
                             egui::RichText::new(max_icon).size(13.0).color(text_color),
@@ -659,7 +708,7 @@ impl QTermApp {
                             ctx.send_viewport_cmd(ViewportCommand::Maximized(!self.last_maximized));
                             self.last_maximized = !self.last_maximized;
                         }
-                        // Close — text color changes on hover (not background fill)
+                        // 关闭按钮（悬停时变红色）
                         let close_color = if ui.rect_contains_pointer(egui::Rect::from_min_size(
                             egui::Pos2::new(ui.max_rect().right() - btn_w, ui.max_rect().top()),
                             egui::vec2(btn_w, btn_h),
@@ -675,9 +724,11 @@ impl QTermApp {
     }
 }
 
-// ==================== Ribbon (left icon bar) ====================
+// ==================== 左侧图标栏（Ribbon） ====================
 
 impl QTermApp {
+    /// 渲染左侧图标栏
+    /// 包含：终端图标、SFTP图标、底部主题切换按钮
     fn render_ribbon(&mut self, ui: &mut egui::Ui) {
         let icon_size = RIBBON_WIDTH - 10.0;
         let sider_bar_bg = self.theme.system.app_sider_bar_bg_color;
@@ -696,7 +747,7 @@ impl QTermApp {
                 ui.vertical(|ui| {
                     ui.add_space(5.0);
 
-                    // Terminal
+                    // 终端图标按钮
                     let terminal_active = self.ribbon_active == RibbonSection::Terminal;
                     let bg = if terminal_active { hover_bg } else { egui::Color32::TRANSPARENT };
                     let fg = if terminal_active { text_active } else { side_text_color };
@@ -708,7 +759,7 @@ impl QTermApp {
                         self.ribbon_active = RibbonSection::Terminal;
                     }
 
-                    // SFTP
+                    // SFTP 图标按钮
                     let sftp_active = self.ribbon_active == RibbonSection::Sftp;
                     let bg = if sftp_active { hover_bg } else { egui::Color32::TRANSPARENT };
                     let fg = if sftp_active { text_active } else { side_text_color };
@@ -720,7 +771,7 @@ impl QTermApp {
                         self.ribbon_active = RibbonSection::Sftp;
                     }
 
-                    // Bottom: theme toggle
+                    // 底部：主题切换按钮（浅色/深色切换）
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                         let theme_icon = if is_dark { "L" } else { "D" };
                         if ui.add(egui::Button::new(
@@ -737,9 +788,11 @@ impl QTermApp {
     }
 }
 
-// ==================== Left Pane ====================
+// ==================== 左侧面板 ====================
 
 impl QTermApp {
+    /// 渲染左侧面板内容
+    /// 根据当前功能区显示：终端连接列表、SFTP提示、设置面板
     fn render_left_pane(&mut self, ui: &mut egui::Ui) {
         let left_list_bg = self.theme.system.app_left_list_bg_color;
         let text_color = self.theme.system.text_color;
@@ -755,30 +808,32 @@ impl QTermApp {
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
+                        // 显示当前功能区的标题
                         let title = match self.ribbon_active {
-                            RibbonSection::Terminal => "Terminal",
+                            RibbonSection::Terminal => "终端",
                             RibbonSection::Sftp => "SFTP",
-                            RibbonSection::Settings => "Settings",
+                            RibbonSection::Settings => "设置",
                         };
                         ui.label(egui::RichText::new(title).strong().color(text_color).size(14.0));
                     });
                     ui.add_space(4.0);
                     ui.separator();
 
+                    // 根据功能区切换面板内容
                     match self.ribbon_active {
                         RibbonSection::Terminal => self.render_terminal_pane(ui),
                         RibbonSection::Sftp => self.render_sftp_section(ui),
                         RibbonSection::Settings => self.render_settings_section(ui),
                     }
 
-                    // Bottom toolbar
+                    // 底部工具栏：新建SSH和本地终端按钮
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.button("+ New SSH").clicked() {
+                            if ui.button("+ 新建 SSH").clicked() {
                                 self.ssh_dialog.open = true;
                             }
-                            if ui.button("Local Term").clicked() {
+                            if ui.button("本地终端").clicked() {
                                 self.new_tab();
                             }
                         });
@@ -788,24 +843,26 @@ impl QTermApp {
             });
     }
 
+    /// 渲染终端连接面板
+    /// 显示 WhaleTerm 配置中的 SSH 连接列表和当前打开的标签页
     fn render_terminal_pane(&mut self, ui: &mut egui::Ui) {
         let side_text = self.theme.system.app_side_text_color;
         let text_color = self.theme.system.text_color;
         let active_bg = self.theme.system.app_left_list_bg_color_active;
         let active_fg = self.theme.system.app_left_list_text_color_active;
 
-        // Collect connection index to open on double-click
+        // 双击打开连接的索引
         let mut open_conn_idx: Option<usize> = None;
 
         ui.vertical(|ui| {
             ui.add_space(8.0);
 
-            // Connections from config
+            // 显示 WhaleTerm 配置中的连接列表
             if !self.connections.is_empty() {
-                ui.label(egui::RichText::new("Connections").size(12.0).color(side_text));
+                ui.label(egui::RichText::new("连接").size(12.0).color(side_text));
                 ui.add_space(4.0);
 
-                // Group by group_name
+                // 按分组名称显示连接
                 let mut current_group = "";
                 for (idx, conn) in self.connections.iter().enumerate() {
                     if conn.group_name != current_group {
@@ -825,22 +882,24 @@ impl QTermApp {
                                 ui.label(egui::RichText::new(label).size(13.0).color(fg));
                             });
                         });
+                    // 双击连接项打开 SSH 会话
                     if inner.response.double_clicked() {
                         open_conn_idx = Some(idx);
                     }
                 }
             } else {
-                ui.label(egui::RichText::new("No connections found.").size(12.0).color(side_text));
+                ui.label(egui::RichText::new("未找到连接配置。").size(12.0).color(side_text));
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("WhaleTerm config not available.").size(11.0).color(side_text));
+                ui.label(egui::RichText::new("WhaleTerm 配置不可用。").size(11.0).color(side_text));
             }
 
+            // 显示当前打开的标签页列表
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Open Tabs").size(12.0).color(side_text));
+            ui.label(egui::RichText::new("打开的标签").size(12.0).color(side_text));
             ui.add_space(4.0);
             for (idx, tab) in self.tabs.iter().enumerate() {
                 let selected = idx == self.active_tab;
-                let label = if tab.alive() { &tab.title } else { "[closed]" };
+                let label = if tab.alive() { &tab.title } else { "[已关闭]" };
                 let (bg, fg) = if selected {
                     (active_bg, active_fg)
                 } else {
@@ -861,16 +920,18 @@ impl QTermApp {
             }
         });
 
-        // Open SSH connection if double-clicked
+        // 双击连接时打开新 SSH 标签页
         if let Some(idx) = open_conn_idx {
             self.open_connection_tab(idx);
         }
     }
 
+    /// 双击连接项时打开新的 SSH 标签页
     fn open_connection_tab(&mut self, conn_idx: usize) {
         use crate::ssh::{SshConfig, SshAuth};
 
         let conn = &self.connections[conn_idx];
+        // 根据认证模型选择认证方式
         let auth = if conn.private_key.is_empty() {
             SshAuth::Password(conn.password.clone())
         } else {
@@ -889,30 +950,32 @@ impl QTermApp {
         self.new_tab();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             if let Err(e) = tab.layout.add_ssh_pane(config, SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines) {
-                self.sftp_error = Some(format!("SSH error: {}", e));
+                self.sftp_error = Some(format!("SSH 错误: {}", e));
                 self.close_tab(self.active_tab);
             }
         }
     }
 
+    /// 渲染 SFTP 提示面板
     fn render_sftp_section(&mut self, ui: &mut egui::Ui) {
         let side_text = self.theme.system.app_side_text_color;
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("SFTP requires an SSH connection.").size(12.0).color(side_text));
+            ui.label(egui::RichText::new("SFTP 需要 SSH 连接。").size(12.0).color(side_text));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Use Ctrl+Shift+F in an SSH tab to open SFTP.").size(11.0).color(side_text));
+            ui.label(egui::RichText::new("在 SSH 标签中使用 Ctrl+Shift+F 打开 SFTP。").size(11.0).color(side_text));
         });
     }
 
+    /// 渲染设置面板（主题切换）
     fn render_settings_section(&mut self, ui: &mut egui::Ui) {
         let side_text = self.theme.system.app_side_text_color;
         let is_dark = self.theme.is_dark();
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Theme").size(12.0).color(side_text));
+            ui.label(egui::RichText::new("主题").size(12.0).color(side_text));
             ui.add_space(4.0);
-            let label = if is_dark { "Switch to Light" } else { "Switch to Dark" };
+            let label = if is_dark { "切换到浅色" } else { "切换到深色" };
             if ui.button(label).clicked() {
                 self.theme.toggle_mode();
                 self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
@@ -921,9 +984,11 @@ impl QTermApp {
     }
 }
 
-// ==================== FootBar (status bar) ====================
+// ==================== 底部状态栏 ====================
 
 impl QTermApp {
+    /// 渲染底部状态栏
+    /// 显示：连接状态指示灯、会话名称、连接状态文字、快捷键提示
     fn render_foot_bar(&self, ctx: &egui::Context) {
         let status_bg = self.theme.system.app_status_bar_bg_color;
         let split_color = self.theme.system.app_split_color;
@@ -940,7 +1005,7 @@ impl QTermApp {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add_space(9.0);
 
-                    // Connection status dot (diameter = footerHeight/3)
+                    // 连接状态指示灯（绿色=已连接，红色=已断开）
                     let connected = self.tabs.get(self.active_tab).map_or(false, |t| t.alive());
                     let dot_color = if connected {
                         connected_color
@@ -954,21 +1019,22 @@ impl QTermApp {
 
                     ui.add_space(4.0);
 
-                    // Session name
-                    let session_name = self.tabs.get(self.active_tab).map_or("No session", |t| &t.title);
+                    // 会话名称
+                    let session_name = self.tabs.get(self.active_tab).map_or("无会话", |t| &t.title);
                     ui.label(egui::RichText::new(session_name).size(12.0).color(status_text));
 
-                    // Pipe separator
+                    // 分隔符
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new("|").size(12.0).color(status_text));
                     ui.add_space(4.0);
-                    let extra_info = if connected { "connected" } else { "disconnected" };
+                    // 连接状态文字
+                    let extra_info = if connected { "已连接" } else { "已断开" };
                     ui.label(egui::RichText::new(extra_info).size(12.0).color(status_text));
 
-                    // Right side: push to right
+                    // 右侧：快捷键提示
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Ctrl+T New | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B Panel")
+                        ui.label(egui::RichText::new("Ctrl+T 新建 | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B 面板")
                             .size(15.0)
                             .color(status_text));
                         ui.add_space(8.0);
@@ -978,24 +1044,26 @@ impl QTermApp {
     }
 }
 
-// ==================== SFTP open / Input handling ====================
+// ==================== SFTP 打开 / 输入处理 ====================
 
 impl QTermApp {
+    /// 处理打开 SFTP 操作
+    /// 从当前活动 SSH 终端面板创建 SFTP 面板
     fn handle_open_sftp(&mut self) {
         let sftp_result = {
             let tab = match self.tabs.get(self.active_tab) {
                 Some(t) => t,
-                None => { self.sftp_error = Some("No active tab".to_string()); return; }
+                None => { self.sftp_error = Some("无活动标签页".to_string()); return; }
             };
             let active_idx = tab.layout.active_pane;
             match tab.layout.panes.get(active_idx) {
                 Some(pane) => {
                     match &pane.kind {
                         PaneKind::Terminal { backend: PaneBackend::Ssh(ssh), .. } => ssh.open_sftp(),
-                        _ => { self.sftp_error = Some("SFTP requires an active SSH terminal pane".to_string()); return; }
+                        _ => { self.sftp_error = Some("SFTP 需要活动的 SSH 终端面板".to_string()); return; }
                     }
                 }
-                None => { self.sftp_error = Some("No active pane".to_string()); return; }
+                None => { self.sftp_error = Some("无活动面板".to_string()); return; }
             }
         };
 
@@ -1003,15 +1071,17 @@ impl QTermApp {
             Ok(sftp) => {
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                     if let Err(e) = tab.layout.add_sftp_pane(sftp, SplitDirection::Vertical) {
-                        self.sftp_error = Some(format!("Failed to add SFTP pane: {}", e));
+                        self.sftp_error = Some(format!("添加 SFTP 面板失败: {}", e));
                     }
                 }
                 self.sftp_error = None;
             }
-            Err(e) => { self.sftp_error = Some(format!("SFTP error: {}", e)); }
+            Err(e) => { self.sftp_error = Some(format!("SFTP 错误: {}", e)); }
         }
     }
 
+    /// 处理终端区域的鼠标交互
+    /// 支持：右键菜单、双击选词、三击选行、拖拽选择
     fn handle_terminal_mouse(&mut self) {
         let pm = match self.pending_mouse.take() {
             Some(pm) => pm,
@@ -1035,13 +1105,13 @@ impl QTermApp {
         let cell_height = pm.cell_height;
         let origin = pm.origin;
 
-        // Right-click: open context menu
+        // 右键点击：打开上下文菜单
         if response.secondary_clicked() {
             self.context_menu.show = true;
             self.context_menu.pos = response.hover_pos().unwrap_or(response.rect.center());
         }
 
-        // Double-click: select word
+        // 双击：选中单词
         if response.double_clicked() {
             if let Some(pos) = response.hover_pos() {
                 let col = ((pos.x - origin.x) / cell_width).floor() as usize;
@@ -1055,7 +1125,7 @@ impl QTermApp {
             return;
         }
 
-        // Triple-click: select line
+        // 三击：选中整行
         if response.triple_clicked() {
             if let Some(pos) = response.hover_pos() {
                 let row = ((pos.y - origin.y) / cell_height).floor() as usize;
@@ -1068,12 +1138,12 @@ impl QTermApp {
             return;
         }
 
-        // Left-click start: clear selection, begin new drag selection
+        // 单击：清除选择，开始新的拖拽选择
         if response.clicked() {
             terminal.selection = None;
         }
 
-        // Drag selection
+        // 拖拽选择：更新选择范围
         if response.dragged() && response.is_pointer_button_down_on() {
             if let Some(pos) = response.hover_pos() {
                 let col = ((pos.x - origin.x) / cell_width).floor() as usize;
@@ -1095,12 +1165,15 @@ impl QTermApp {
         }
     }
 
+    /// 渲染右键上下文菜单
+    /// 包含：复制、粘贴、清屏、水平/垂直分屏选项
     fn render_context_menu(&mut self, ctx: &egui::Context) {
         if !self.context_menu.show {
             return;
         }
 
         let menu_pos = self.context_menu.pos;
+        // 检查当前是否有选中文本
         let has_selection = self.tabs.get(self.active_tab).and_then(|t| {
             let idx = t.layout.active_pane;
             t.layout.panes.get(idx).and_then(|p| match &p.kind {
@@ -1125,34 +1198,39 @@ impl QTermApp {
                     ui.set_min_width(160.0);
                     ui.vertical(|ui| {
                         let text_color = self.theme.system.text_color;
-                        let copy_label = if has_selection.is_some() { "Copy" } else { "Copy (no selection)" };
+                        // 复制按钮（有选中文本时可用）
+                        let copy_label = if has_selection.is_some() { "复制" } else { "复制（无选中）" };
                         if ui.add(egui::Button::new(
                             egui::RichText::new(copy_label).size(13.0).color(text_color),
                         ).frame(false)).clicked() && has_selection.is_some() {
                             do_copy = true;
                             close_menu = true;
                         }
+                        // 粘贴按钮
                         if ui.add(egui::Button::new(
-                            egui::RichText::new("Paste").size(13.0).color(text_color),
+                            egui::RichText::new("粘贴").size(13.0).color(text_color),
                         ).frame(false)).clicked() {
                             do_paste = true;
                             close_menu = true;
                         }
                         ui.separator();
+                        // 清屏按钮
                         if ui.add(egui::Button::new(
-                            egui::RichText::new("Clear Screen").size(13.0).color(text_color),
+                            egui::RichText::new("清屏").size(13.0).color(text_color),
                         ).frame(false)).clicked() {
                             do_clear = true;
                             close_menu = true;
                         }
+                        // 水平分屏按钮
                         if ui.add(egui::Button::new(
-                            egui::RichText::new("Split Horizontal").size(13.0).color(text_color),
+                            egui::RichText::new("水平分屏").size(13.0).color(text_color),
                         ).frame(false)).clicked() {
                             do_split_h = true;
                             close_menu = true;
                         }
+                        // 垂直分屏按钮
                         if ui.add(egui::Button::new(
-                            egui::RichText::new("Split Vertical").size(13.0).color(text_color),
+                            egui::RichText::new("垂直分屏").size(13.0).color(text_color),
                         ).frame(false)).clicked() {
                             do_split_v = true;
                             close_menu = true;
@@ -1161,7 +1239,7 @@ impl QTermApp {
                 });
             });
 
-        // Close menu if clicked outside
+        // 点击菜单外部关闭菜单
         if ctx.input(|i| i.pointer.any_click()) {
             let area_rect = ctx.memory(|m| m.area_rect(egui::Id::new("context_menu")));
             if let Some(rect) = area_rect {
@@ -1175,6 +1253,7 @@ impl QTermApp {
             self.context_menu.show = false;
         }
 
+        // 执行菜单操作
         if do_copy {
             self.do_copy_selection(ctx);
         }
@@ -1198,6 +1277,7 @@ impl QTermApp {
         }
     }
 
+    /// 复制选中文本到剪贴板
     fn do_copy_selection(&mut self, ctx: &egui::Context) {
         let text = self.tabs.get(self.active_tab).and_then(|t| {
             let idx = t.layout.active_pane;
@@ -1211,11 +1291,12 @@ impl QTermApp {
         }
     }
 
+    /// 粘贴：请求系统剪贴板内容
     fn do_paste(&mut self, ctx: &egui::Context) {
-        // Request the system to paste, which will generate an Event::Paste next frame
         ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     }
 
+    /// 清屏：清除终端内容并发送清屏指令到后端
     fn do_clear_screen(&mut self) {
         let tab = match self.tabs.get_mut(self.active_tab) {
             Some(t) => t,
@@ -1227,11 +1308,13 @@ impl QTermApp {
         };
         match &mut pane.kind {
             PaneKind::Terminal { terminal, backend } => {
+                // 清除终端网格内容
                 for row in 0..terminal.rows() {
                     terminal.grid.clear_row(row);
                 }
                 terminal.cursor.row = 0;
                 terminal.cursor.col = 0;
+                // 发送 ANSI 清屏指令到 PTY/SSH
                 match backend {
                     PaneBackend::Local(pty) => { let _ = pty.write(b"\x1b[2J\x1b[H"); }
                     PaneBackend::Ssh(ssh) => { let _ = ssh.write(b"\x1b[2J\x1b[H"); }
@@ -1241,11 +1324,13 @@ impl QTermApp {
         }
     }
 
+    /// 处理用户输入事件
+    /// 包括鼠标事件、键盘事件（文本输入、快捷键、特殊键）
     fn handle_input(&mut self, ctx: &egui::Context) {
-        // Handle mouse events from terminal rendering
+        // 处理终端鼠标交互
         self.handle_terminal_mouse();
 
-        // Render context menu
+        // 渲染右键上下文菜单
         self.render_context_menu(ctx);
 
         let tab = match self.tabs.get_mut(self.active_tab) {
@@ -1259,6 +1344,7 @@ impl QTermApp {
 
         match &mut pane.kind {
             PaneKind::Terminal { terminal, backend } => {
+                // 终端面板获得焦点时取消 UI 元素焦点
                 if ctx.memory(|m| m.focused().is_some()) {
                     ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
                 }
@@ -1267,16 +1353,18 @@ impl QTermApp {
                     for event in &i.events {
                         match event {
                             egui::Event::Text(text) => {
-                                // Skip if Ctrl is held (handled by key events)
+                                // Ctrl 键按下时不处理文本输入（由快捷键处理）
                                 if i.modifiers.ctrl || i.modifiers.command {
                                     continue;
                                 }
+                                // 将文本写入 PTY/SSH
                                 match backend {
                                     PaneBackend::Local(pty) => { let _ = pty.write(text.as_bytes()); }
                                     PaneBackend::Ssh(ssh) => { let _ = ssh.write(text.as_bytes()); }
                                 }
                             }
                             egui::Event::Paste(text) => {
+                                // 粘贴文本到 PTY/SSH
                                 if !text.is_empty() {
                                     match backend {
                                         PaneBackend::Local(pty) => { let _ = pty.write(text.as_bytes()); }
@@ -1285,7 +1373,7 @@ impl QTermApp {
                                 }
                             }
                             egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                                // Ctrl+C: copy selection or send SIGINT
+                                // Ctrl+C：复制选中文本或发送 SIGINT（\x03）
                                 if *key == egui::Key::C && modifiers.ctrl && !modifiers.shift {
                                     if let Some(text) = terminal.selected_text() {
                                         ctx.output_mut(|o| o.copied_text = text);
@@ -1298,18 +1386,19 @@ impl QTermApp {
                                     }
                                     continue;
                                 }
-                                // Ctrl+Shift+C: force copy
+                                // Ctrl+Shift+C：强制复制选中文本
                                 if *key == egui::Key::C && modifiers.ctrl && modifiers.shift {
                                     if let Some(text) = terminal.selected_text() {
                                         ctx.output_mut(|o| o.copied_text = text);
                                     }
                                     continue;
                                 }
-                                // Ctrl+V / Ctrl+Shift+V: request paste (will come as Event::Paste next frame)
+                                // Ctrl+V / Ctrl+Shift+V：请求粘贴
                                 if *key == egui::Key::V && modifiers.ctrl {
                                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                                     continue;
                                 }
+                                // 将按键转换为 ANSI 转义序列写入后端
                                 if let Some(seq) = key_to_seq(*key, *modifiers) {
                                     match backend {
                                         PaneBackend::Local(pty) => { let _ = pty.write(seq.as_bytes()); }
@@ -1322,6 +1411,7 @@ impl QTermApp {
                     }
                 });
 
+                // 发送终端待回复的 ANSI 响应
                 for reply in terminal.pending_replies.drain(..) {
                     match backend {
                         PaneBackend::Local(pty) => { let _ = pty.write(&reply); }
@@ -1334,7 +1424,10 @@ impl QTermApp {
     }
 }
 
+/// 将按键和修饰键转换为 ANSI 转义序列
+/// 支持 Ctrl+字母、方向键、功能键等
 fn key_to_seq(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
+    // Ctrl + 字母键 → 控制字符
     if mods.ctrl && !mods.shift {
         let ctrl_char = match key {
             egui::Key::A => Some("\x01"), egui::Key::B => Some("\x02"),
@@ -1351,6 +1444,7 @@ fn key_to_seq(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
         if let Some(s) = ctrl_char { return Some(s.to_string()); }
     }
 
+    // 特殊键 → ANSI 转义序列
     match key {
         egui::Key::Enter => Some("\r".to_string()),
         egui::Key::Backspace => Some("\x7f".to_string()),

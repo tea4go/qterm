@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use self::models::{Connection, ConnectionsFile};
 
+/// 获取 WhaleTerm 连接配置文件路径
+/// Windows: %APPDATA%\WhaleTerm\connections.json
+/// 其他: ~/.config/WhaleTerm/connections.json
 fn whaleterm_config_path() -> PathBuf {
     if let Some(appdata) = std::env::var_os("APPDATA") {
         let mut p = PathBuf::from(appdata);
@@ -11,7 +14,7 @@ fn whaleterm_config_path() -> PathBuf {
         p.push("connections.json");
         return p;
     }
-    // Fallback for non-Windows
+    // 非 Windows 系统的回退路径
     if let Some(home) = std::env::var_os("HOME") {
         let mut p = PathBuf::from(home);
         p.push(".config");
@@ -22,8 +25,8 @@ fn whaleterm_config_path() -> PathBuf {
     PathBuf::from("connections.json")
 }
 
-/// Load all connections from the WhaleTerm config file.
-/// Returns a flat list of connections with their group names.
+/// 从 WhaleTerm 配置文件加载所有连接
+/// 解析分组和连接信息，解密密码后返回扁平列表
 pub fn load_connections() -> Vec<Connection> {
     let path = whaleterm_config_path();
     let data = match std::fs::read_to_string(&path) {
@@ -35,6 +38,7 @@ pub fn load_connections() -> Vec<Connection> {
         Err(_) => return Vec::new(),
     };
 
+    // 将分组中的连接展开为扁平列表
     let mut conns = Vec::new();
     for group in &file.groups {
         for wc in &group.connections {
@@ -54,8 +58,9 @@ pub fn load_connections() -> Vec<Connection> {
     conns
 }
 
-/// AES-256-CFB decryption, compatible with WhaleTerm.
-/// Format: hex(IV[16 bytes] + ciphertext)
+/// AES-256-CFB 密码解密，兼容 WhaleTerm 加密格式
+/// 格式：hex(IV[16字节] + ciphertext)
+/// 密钥由主板序列号派生，或使用硬编码回退密钥
 fn decrypt_password(hex_str: &str) -> String {
     use aes::Aes256;
     use cipher::{InnerIvInit, KeyInit};
@@ -64,23 +69,27 @@ fn decrypt_password(hex_str: &str) -> String {
         return String::new();
     }
 
+    // 将十六进制字符串解码为字节
     let data = match hex::decode(hex_str) {
         Ok(d) => d,
         Err(_) => return String::new(),
     };
 
-    if data.len() < 17 { // minimum: 16 IV + 1 byte ciphertext
+    // 最小长度检查：16字节 IV + 至少1字节密文
+    if data.len() < 17 {
         return String::new();
     }
 
     let key = derive_key();
     let (iv, ciphertext) = data.split_at(16);
 
+    // 创建 AES-256 解密器
     let cipher = match Aes256::new_from_slice(&key) {
         Ok(c) => c,
         Err(_) => return String::new(),
     };
 
+    // 使用 CFB 模式解密
     let mut buffer = ciphertext.to_vec();
     let decryptor = cfb_mode::Decryptor::<Aes256>::inner_iv_slice_init(cipher, iv).unwrap();
     decryptor.decrypt(&mut buffer);
@@ -88,8 +97,8 @@ fn decrypt_password(hex_str: &str) -> String {
     String::from_utf8(buffer).unwrap_or_default()
 }
 
-/// Derive 32-byte key from motherboard serial, or use fallback.
-/// Mirrors WhaleTerm's InitCommon() logic.
+/// 从主板序列号派生 32字节 AES 密钥，或使用硬编码回退密钥
+/// 兼容 WhaleTerm 的 InitCommon() 密钥派生逻辑
 fn derive_key() -> [u8; 32] {
     let fallback = b"51HytFKWhasDs2Q4E1mjHXQVJTm2SOym";
 
@@ -102,10 +111,10 @@ fn derive_key() -> [u8; 32] {
             let serial_len = serial_bytes.len().min(32);
             let padded_len = serial_len.min(32);
 
-            // Copy serial bytes (truncated to 32)
+            // 复制序列号字节（截断到32字节）
             key[..padded_len].copy_from_slice(&serial_bytes[..padded_len]);
 
-            // Pad with fallback string
+            // 不足32字节时用回退密钥填充
             if padded_len < 32 {
                 let pad_src = fallback;
                 let mut offset = padded_len;
@@ -119,6 +128,7 @@ fn derive_key() -> [u8; 32] {
             key
         }
         _ => {
+            // 无主板序列号时使用硬编码回退密钥
             let mut key = [0u8; 32];
             key.copy_from_slice(&fallback[..32]);
             key
@@ -126,7 +136,8 @@ fn derive_key() -> [u8; 32] {
     }
 }
 
-/// Windows: get motherboard serial via PowerShell
+/// Windows: 通过 PowerShell 获取主板序列号
+/// 用于 AES 密钥派生
 fn get_motherboard_serial() -> Option<String> {
     let output = std::process::Command::new("powershell")
         .args(["-Command", "(Get-WmiObject Win32_BaseBoard).SerialNumber"])

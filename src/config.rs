@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// 获取应用配置目录路径
+/// Windows: %APPDATA%\qterm
+/// 其他: ~/.config/qterm
 fn config_dir() -> PathBuf {
     #[cfg(windows)]
     {
@@ -24,23 +27,26 @@ fn config_dir() -> PathBuf {
     PathBuf::from(".")
 }
 
+/// 获取配置文件完整路径（config.ini）
 fn config_path() -> PathBuf {
     let mut path = config_dir();
     path.push("config.ini");
     path
 }
 
+/// 应用配置结构体
+/// 存储窗口位置、尺寸、主题、字体大小等运行时配置
 #[derive(Clone)]
 pub struct AppConfig {
-    pub window_x: Option<f32>,
-    pub window_y: Option<f32>,
-    pub window_width: Option<f32>,
-    pub window_height: Option<f32>,
-    pub maximized: bool,
-    pub font_size: f32,
-    pub scrollback_lines: usize,
-    pub theme: String,
-    pub shell_path: String,
+    pub window_x: Option<f32>,       // 窗口 X 坐标
+    pub window_y: Option<f32>,       // 窗口 Y 坐标
+    pub window_width: Option<f32>,   // 窗口宽度
+    pub window_height: Option<f32>,  // 窗口高度
+    pub maximized: bool,             // 是否最大化
+    pub font_size: f32,              // 终端字体大小
+    pub scrollback_lines: usize,     // 回滚缓冲区行数
+    pub theme: String,               // 主题名称（dark/light）
+    pub shell_path: String,          // 自定义 Shell 路径
 }
 
 impl Default for AppConfig {
@@ -60,6 +66,8 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// 从 config.ini 文件加载配置
+    /// 如果文件不存在或解析失败，返回默认配置
     pub fn load() -> Self {
         let path = config_path();
         let content = match std::fs::read_to_string(&path) {
@@ -89,6 +97,7 @@ impl AppConfig {
         }
     }
 
+    /// 将当前配置保存到 config.ini 文件
     pub fn save(&self) {
         let dir = config_dir();
         let _ = std::fs::create_dir_all(&dir);
@@ -117,6 +126,8 @@ impl AppConfig {
     }
 }
 
+/// 解析 INI 格式配置文件
+/// 简单的 key=value 格式，忽略注释行（#开头）和空行
 fn parse_ini(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in content.lines() {
@@ -131,8 +142,9 @@ fn parse_ini(content: &str) -> HashMap<String, String> {
     map
 }
 
-// ==================== WhaleTerm preferences.json ====================
+// ==================== WhaleTerm preferences.json 配置 ====================
 
+/// WhaleTerm preferences.json 文件结构（内部分析用）
 #[derive(Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct PreferencesFile {
@@ -141,31 +153,37 @@ struct PreferencesFile {
     shell: ShellSection,
 }
 
+/// 配置区域字体设置（preferences.json config 部分）
 #[derive(Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct ConfigSection {
-    default_font_family: Vec<String>,
-    default_font_size: f32,
-    default_font_bold: String,
+    default_font_family: Vec<String>,  // 默认字体族
+    default_font_size: f32,            // 默认字体大小
+    default_font_bold: String,         // 是否粗体
 }
 
+/// 通用 UI 字体设置（preferences.json general 部分）
 #[derive(Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct GeneralSection {
-    font_family: Vec<String>,
-    font_size: f32,
-    font_bold: String,
-    theme: String,
+    font_family: Vec<String>,  // 通用字体族
+    font_size: f32,            // 通用字体大小
+    font_bold: String,         // 是否粗体
+    theme: String,             // 主题名称
 }
 
+/// Shell/终端字体设置（preferences.json shell 部分）
 #[derive(Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct ShellSection {
-    font_family: Vec<String>,
-    font_size: f32,
-    font_bold: String,
+    font_family: Vec<String>,  // 终端字体族
+    font_size: f32,            // 终端字体大小
+    font_bold: String,         // 是否粗体
 }
 
+/// 获取 WhaleTerm preferences.json 文件路径
+/// Windows: %APPDATA%\WhaleTerm\preferences.json
+/// 其他: ~/.config/WhaleTerm/preferences.json
 fn preferences_path() -> PathBuf {
     #[cfg(windows)]
     {
@@ -185,18 +203,20 @@ fn preferences_path() -> PathBuf {
     PathBuf::from("preferences.json")
 }
 
+/// 应用偏好设置结构体
+/// 从 WhaleTerm preferences.json 读取字体和主题配置
 #[derive(Clone)]
 pub struct Preferences {
-    pub config_font_family: Vec<String>,
-    pub config_font_size: f32,
-    pub config_font_bold: bool,
-    pub general_font_family: Vec<String>,
-    pub general_font_size: f32,
-    pub general_font_bold: bool,
-    pub shell_font_family: Vec<String>,
-    pub shell_font_size: f32,
-    pub shell_font_bold: bool,
-    pub theme: String,
+    pub config_font_family: Vec<String>,   // 配置区字体族
+    pub config_font_size: f32,             // 配置区字体大小
+    pub config_font_bold: bool,            // 配置区是否粗体
+    pub general_font_family: Vec<String>,  // 通用区字体族
+    pub general_font_size: f32,            // 通用区字体大小
+    pub general_font_bold: bool,           // 通用区是否粗体
+    pub shell_font_family: Vec<String>,    // 终端字体族
+    pub shell_font_size: f32,              // 终端字体大小
+    pub shell_font_bold: bool,             // 终端是否粗体
+    pub theme: String,                     // 主题名称
 }
 
 impl Default for Preferences {
@@ -217,6 +237,8 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// 从 WhaleTerm preferences.json 加载偏好设置
+    /// 如果文件不存在或解析失败，返回默认设置
     pub fn load() -> Self {
         let path = preferences_path();
         let content = match std::fs::read_to_string(&path) {
