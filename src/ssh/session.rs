@@ -4,7 +4,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::sync::mpsc::Receiver;
 
 use super::client;
-use super::{SshConfig, SshError};
+use super::{SshConfig, SshError, SharedSshHandle};
 
 pub async fn run_ssh_session(
     config: SshConfig,
@@ -14,13 +14,19 @@ pub async fn run_ssh_session(
     mut writer_rx: Receiver<Vec<u8>>,
     mut resize_rx: Receiver<(u16, u16)>,
     alive: Arc<AtomicBool>,
+    handle_out: tokio::sync::oneshot::Sender<SharedSshHandle>,
 ) -> Result<(), SshError> {
     let handle = client::connect_and_auth(&config).await?;
+    let handle = Arc::new(tokio::sync::Mutex::new(handle));
 
-    let mut channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| SshError::Channel(e.to_string()))?;
+    let _ = handle_out.send(handle.clone());
+
+    let mut channel = {
+        let h = handle.lock().await;
+        h.channel_open_session()
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?
+    };
 
     channel
         .request_pty(true, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
@@ -64,6 +70,7 @@ pub async fn run_ssh_session(
 
     alive.store(false, Ordering::Relaxed);
     let _ = channel.eof().await;
-    let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+    let h = handle.lock().await;
+    let _ = h.disconnect(russh::Disconnect::ByApplication, "", "").await;
     Ok(())
 }

@@ -6,6 +6,7 @@ mod pty;
 mod tab;
 mod terminal;
 mod theme;
+mod sftp;
 mod ssh;
 mod ui;
 

@@ -2,7 +2,7 @@ use egui::{Color32, FontId, Pos2, Rect, Ui, Vec2};
 
 use super::Terminal;
 use super::cell::TermColor;
-use crate::theme::TermTheme;
+use crate::theme::terminal::TerminalTheme;
 
 pub struct TerminalSize {
     pub rows: usize,
@@ -26,7 +26,7 @@ pub fn calculate_size(ui: &Ui, font_size: f32) -> TerminalSize {
     }
 }
 
-pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TermTheme) {
+pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) {
     let font_id = FontId::monospace(theme.font_size);
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
     let cell_height = theme.font_size * 1.4;
@@ -105,7 +105,7 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TermTheme) {
     }
 }
 
-fn resolve_fg(color: TermColor, inverse: bool, theme: &TermTheme) -> Color32 {
+fn resolve_fg(color: TermColor, inverse: bool, theme: &TerminalTheme) -> Color32 {
     if inverse {
         color.to_color32(false, theme)
     } else {
@@ -113,7 +113,7 @@ fn resolve_fg(color: TermColor, inverse: bool, theme: &TermTheme) -> Color32 {
     }
 }
 
-fn resolve_bg(color: TermColor, inverse: bool, theme: &TermTheme) -> Color32 {
+fn resolve_bg(color: TermColor, inverse: bool, theme: &TerminalTheme) -> Color32 {
     if inverse {
         color.to_color32(true, theme)
     } else {

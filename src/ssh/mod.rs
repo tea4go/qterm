@@ -7,7 +7,7 @@ use tokio::runtime::Runtime;
 
 static SSH_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-fn get_runtime() -> &'static Runtime {
+pub fn get_runtime() -> &'static Runtime {
     SSH_RUNTIME.get_or_init(|| {
         Runtime::new().expect("Failed to create tokio runtime")
     })
@@ -47,11 +47,14 @@ impl std::fmt::Display for SshError {
 
 impl std::error::Error for SshError {}
 
+pub type SharedSshHandle = Arc<tokio::sync::Mutex<russh::client::Handle<client::SshClient>>>;
+
 pub struct SshHandle {
     pub reader_rx: Receiver<Vec<u8>>,
     writer_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     resize_tx: tokio::sync::mpsc::Sender<(u16, u16)>,
     alive: Arc<AtomicBool>,
+    russh_handle: SharedSshHandle,
 }
 
 impl SshHandle {
@@ -59,6 +62,7 @@ impl SshHandle {
         let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>();
         let (writer_tx, writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
         let (resize_tx, resize_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(16);
+        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<SharedSshHandle>();
         let alive = Arc::new(AtomicBool::new(true));
         let alive_clone = alive.clone();
 
@@ -69,7 +73,7 @@ impl SshHandle {
         std::thread::spawn(move || {
             rt.block_on(async move {
                 match session::run_ssh_session(
-                    config_clone, rows, cols, output_tx, writer_rx, resize_rx, alive_spawn,
+                    config_clone, rows, cols, output_tx, writer_rx, resize_rx, alive_spawn, handle_tx,
                 ).await {
                     Ok(()) => {}
                     Err(e) => eprintln!("SSH session error: {}", e),
@@ -78,11 +82,15 @@ impl SshHandle {
             alive_clone.store(false, Ordering::Relaxed);
         });
 
+        let russh_handle = handle_rx.blocking_recv()
+            .map_err(|_| SshError::Channel("Failed to initialize SSH session".to_string()))?;
+
         Ok(Self {
             reader_rx: output_rx,
             writer_tx,
             resize_tx,
             alive,
+            russh_handle,
         })
     }
 
@@ -101,5 +109,9 @@ impl SshHandle {
 
     pub fn disconnect(&self) {
         self.alive.store(false, Ordering::Relaxed);
+    }
+
+    pub fn open_sftp(&self) -> Result<crate::sftp::SftpHandle, SshError> {
+        crate::sftp::SftpHandle::new(self.russh_handle.clone(), get_runtime())
     }
 }

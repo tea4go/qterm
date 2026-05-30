@@ -1,4 +1,4 @@
-use crate::ui::split_pane::SplitLayout;
+use crate::ui::split_pane::{SplitLayout, PaneKind};
 
 pub struct Tab {
     pub id: String,
@@ -19,8 +19,10 @@ impl Tab {
     pub fn poll(&mut self) {
         self.layout.poll_all();
         if let Some(pane) = self.layout.active_pane() {
-            if !pane.terminal.title.is_empty() {
-                self.title = pane.terminal.title.clone();
+            if let PaneKind::Terminal { terminal, .. } = &pane.kind {
+                if !terminal.title.is_empty() {
+                    self.title = terminal.title.clone();
+                }
             }
         }
     }

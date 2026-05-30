@@ -3,28 +3,31 @@ use eframe::egui;
 use crate::config::AppConfig;
 use crate::tab::Tab;
 use crate::terminal::renderer;
-use crate::theme::TermTheme;
-use crate::ui::split_pane::SplitDirection;
+use crate::theme::AppTheme;
+use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
 
 
 pub struct QTermApp {
     tabs: Vec<Tab>,
     active_tab: usize,
     config: AppConfig,
-    theme: TermTheme,
+    theme: AppTheme,
     last_window_pos: Option<(f32, f32)>,
     last_window_size: Option<(f32, f32)>,
     last_maximized: bool,
     last_cols: usize,
     last_rows: usize,
     ssh_dialog: crate::ui::ssh_dialog::SshDialog,
+    sftp_error: Option<String>,
 }
 
 impl QTermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         Self::configure_fonts(&cc.egui_ctx);
 
-        let theme = TermTheme::dark();
+        let is_dark = config.theme != "light";
+        let theme = if is_dark { AppTheme::dark() } else { AppTheme::light() };
+        theme.system.apply_to_egui(&cc.egui_ctx, is_dark);
         let mut app = Self {
             tabs: Vec::new(),
             active_tab: 0,
@@ -36,6 +39,7 @@ impl QTermApp {
             last_cols: 80,
             last_rows: 24,
             ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
+            sftp_error: None,
         };
         app.new_tab();
         app
@@ -130,6 +134,9 @@ impl eframe::App for QTermApp {
             if i.key_pressed(egui::Key::N) && i.modifiers.ctrl && i.modifiers.shift {
                 action = Some(Action::OpenSshDialog);
             }
+            if i.key_pressed(egui::Key::F) && i.modifiers.ctrl && i.modifiers.shift {
+                action = Some(Action::OpenSftp);
+            }
             if i.key_pressed(egui::Key::ArrowRight) && i.modifiers.ctrl && !i.modifiers.shift {
                 action = Some(Action::NextPane);
             }
@@ -189,6 +196,9 @@ impl eframe::App for QTermApp {
             Some(Action::OpenSshDialog) => {
                 self.ssh_dialog.open = true;
             }
+            Some(Action::OpenSftp) => {
+                self.handle_open_sftp();
+            }
             None => {}
         }
 
@@ -218,7 +228,7 @@ impl eframe::App for QTermApp {
 
         // Central panel: terminal
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(self.theme.background))
+            .frame(egui::Frame::none().fill(self.theme.system.app_content_term_bg_color))
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     ui.centered_and_justified(|ui| {
@@ -233,7 +243,7 @@ impl eframe::App for QTermApp {
                 };
 
                 // Calculate and apply terminal resize
-                let size = renderer::calculate_size(ui, self.theme.font_size);
+                let size = renderer::calculate_size(ui, self.theme.terminal.font_size);
                 let (target_rows, target_cols) = if pane_count <= 1 {
                     (size.rows, size.cols)
                 } else {
@@ -253,11 +263,18 @@ impl eframe::App for QTermApp {
                     }
                 }
 
-                let tab = &self.tabs[self.active_tab];
+                let tab = &mut self.tabs[self.active_tab];
                 if pane_count <= 1 {
                     // Single pane: full screen render
-                    if let Some(pane) = tab.layout.active_pane() {
-                        renderer::render(ui, &pane.terminal, &self.theme);
+                    if let Some(pane) = tab.layout.active_pane_mut() {
+                        match &mut pane.kind {
+                            PaneKind::Terminal { terminal, .. } => {
+                                renderer::render(ui, terminal, &self.theme.terminal);
+                            }
+                            PaneKind::Sftp { panel } => {
+                                panel.show(ui);
+                            }
+                        }
                     }
                 } else {
                     // Multi-pane split rendering
@@ -266,7 +283,7 @@ impl eframe::App for QTermApp {
                         SplitDirection::Horizontal => {
                             let available_height = ui.available_height();
                             let pane_height = available_height / pane_count as f32;
-                            for (idx, pane) in tab.layout.panes.iter().enumerate() {
+                            for (idx, pane) in tab.layout.panes.iter_mut().enumerate() {
                                 let is_active = idx == active_idx;
                                 let stroke = if is_active {
                                     egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
@@ -274,11 +291,18 @@ impl eframe::App for QTermApp {
                                     egui::Stroke::NONE
                                 };
                                 egui::Frame::none()
-                                    .fill(self.theme.background)
+                                    .fill(self.theme.system.app_content_term_bg_color)
                                     .stroke(stroke)
                                     .show(ui, |ui| {
                                         ui.set_max_height(pane_height - 2.0);
-                                        renderer::render(ui, &pane.terminal, &self.theme);
+                                        match &mut pane.kind {
+                                            PaneKind::Terminal { terminal, .. } => {
+                                                renderer::render(ui, terminal, &self.theme.terminal);
+                                            }
+                                            PaneKind::Sftp { panel } => {
+                                                panel.show(ui);
+                                            }
+                                        }
                                     });
                             }
                         }
@@ -286,7 +310,7 @@ impl eframe::App for QTermApp {
                             let available_width = ui.available_width();
                             let pane_width = available_width / pane_count as f32;
                             ui.horizontal(|ui| {
-                                for (idx, pane) in tab.layout.panes.iter().enumerate() {
+                                for (idx, pane) in tab.layout.panes.iter_mut().enumerate() {
                                     let is_active = idx == active_idx;
                                     let stroke = if is_active {
                                         egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
@@ -294,11 +318,18 @@ impl eframe::App for QTermApp {
                                         egui::Stroke::NONE
                                     };
                                     egui::Frame::none()
-                                        .fill(self.theme.background)
+                                        .fill(self.theme.system.app_content_term_bg_color)
                                         .stroke(stroke)
                                         .show(ui, |ui| {
                                             ui.set_max_width(pane_width - 2.0);
-                                            renderer::render(ui, &pane.terminal, &self.theme);
+                                            match &mut pane.kind {
+                                                PaneKind::Terminal { terminal, .. } => {
+                                                    renderer::render(ui, terminal, &self.theme.terminal);
+                                                }
+                                                PaneKind::Sftp { panel } => {
+                                                    panel.show(ui);
+                                                }
+                                            }
                                         });
                                 }
                             });
@@ -332,6 +363,7 @@ impl eframe::App for QTermApp {
         self.config.window_y = self.last_window_pos.map(|(_, y)| y);
         self.config.window_width = self.last_window_size.map(|(w, _)| w);
         self.config.window_height = self.last_window_size.map(|(_, h)| h);
+        self.config.theme = if self.theme.is_dark() { "dark".to_string() } else { "light".to_string() };
         self.config.save();
         for tab in &mut self.tabs {
             tab.close();
@@ -348,9 +380,54 @@ enum Action {
     NextPane,
     ClosePane,
     OpenSshDialog,
+    OpenSftp,
 }
 
 impl QTermApp {
+    fn handle_open_sftp(&mut self) {
+        let sftp_result = {
+            let tab = match self.tabs.get(self.active_tab) {
+                Some(t) => t,
+                None => {
+                    self.sftp_error = Some("No active tab".to_string());
+                    return;
+                }
+            };
+            let active_idx = tab.layout.active_pane;
+            match tab.layout.panes.get(active_idx) {
+                Some(pane) => {
+                    match &pane.kind {
+                        PaneKind::Terminal { backend: PaneBackend::Ssh(ssh), .. } => {
+                            ssh.open_sftp()
+                        }
+                        _ => {
+                            self.sftp_error = Some("SFTP requires an active SSH terminal pane".to_string());
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    self.sftp_error = Some("No active pane".to_string());
+                    return;
+                }
+            }
+        };
+
+        match sftp_result {
+            Ok(sftp) => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    if let Err(e) = tab.layout.add_sftp_pane(sftp, SplitDirection::Vertical) {
+                        self.sftp_error = Some(format!("Failed to add SFTP pane: {}", e));
+                    }
+                }
+                self.sftp_error = None;
+            }
+            Err(e) => {
+                self.sftp_error = Some(format!("SFTP error: {}", e));
+            }
+        }
+    }
+
     fn handle_input(&mut self, ctx: &egui::Context) {
         let tab = match self.tabs.get_mut(self.active_tab) {
             Some(t) => t,
@@ -361,31 +438,50 @@ impl QTermApp {
             None => return,
         };
 
-        // Ensure no widget steals keyboard focus from the terminal
-        if ctx.memory(|m| m.focused().is_some()) {
-            ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
-        }
+        // Only send keyboard input to terminal panes
+        match &mut pane.kind {
+            PaneKind::Terminal { terminal, backend } => {
+                // Ensure no widget steals keyboard focus from the terminal
+                if ctx.memory(|m| m.focused().is_some()) {
+                    ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
+                }
 
-        ctx.input(|i| {
-            for event in &i.events {
-                match event {
-                    egui::Event::Text(text) => {
-                        pane.write(text.as_bytes());
-                    }
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => {
-                        if let Some(seq) = key_to_seq(*key, *modifiers) {
-                            pane.write(seq.as_bytes());
+                ctx.input(|i| {
+                    for event in &i.events {
+                        match event {
+                            egui::Event::Text(text) => {
+                                match backend {
+                                    PaneBackend::Local(pty) => { let _ = pty.write(text.as_bytes()); }
+                                    PaneBackend::Ssh(ssh) => { let _ = ssh.write(text.as_bytes()); }
+                                }
+                            }
+                            egui::Event::Key {
+                                key,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } => {
+                                if let Some(seq) = key_to_seq(*key, *modifiers) {
+                                    match backend {
+                                        PaneBackend::Local(pty) => { let _ = pty.write(seq.as_bytes()); }
+                                        PaneBackend::Ssh(ssh) => { let _ = ssh.write(seq.as_bytes()); }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
+                });
+
+                for reply in terminal.pending_replies.drain(..) {
+                    match backend {
+                        PaneBackend::Local(pty) => { let _ = pty.write(&reply); }
+                        PaneBackend::Ssh(ssh) => { let _ = ssh.write(&reply); }
+                    }
                 }
             }
-        });
+            PaneKind::Sftp { .. } => {}
+        }
     }
 }
 

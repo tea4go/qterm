@@ -1,6 +1,6 @@
 use egui::Color32;
 
-use crate::theme::TermTheme;
+use crate::theme::terminal::TerminalTheme;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct CellAttrs {
@@ -31,7 +31,7 @@ pub enum TermColor {
 }
 
 impl TermColor {
-    pub fn to_color32(&self, is_fg: bool, theme: &TermTheme) -> Color32 {
+    pub fn to_color32(&self, is_fg: bool, theme: &TerminalTheme) -> Color32 {
         match self {
             TermColor::Default => {
                 if is_fg {

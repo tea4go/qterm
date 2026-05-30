@@ -1,5 +1,6 @@
 use crate::pty::PtyHandle;
 use crate::ssh::{SshHandle, SshConfig};
+use crate::sftp::SftpHandle;
 use crate::terminal::Terminal;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -13,10 +14,14 @@ pub enum PaneBackend {
     Ssh(SshHandle),
 }
 
+pub enum PaneKind {
+    Terminal { terminal: Terminal, backend: PaneBackend },
+    Sftp { panel: crate::ui::sftp_panel::SftpPanel },
+}
+
 pub struct ChildPane {
     pub id: String,
-    pub terminal: Terminal,
-    pub backend: PaneBackend,
+    pub kind: PaneKind,
     pub alive: bool,
 }
 
@@ -25,8 +30,10 @@ impl ChildPane {
         let pty = PtyHandle::spawn(rows as u16, cols as u16, shell)?;
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
-            terminal: Terminal::new(rows, cols, scrollback),
-            backend: PaneBackend::Local(pty),
+            kind: PaneKind::Terminal {
+                terminal: Terminal::new(rows, cols, scrollback),
+                backend: PaneBackend::Local(pty),
+            },
             alive: true,
         })
     }
@@ -35,33 +42,54 @@ impl ChildPane {
         let ssh = SshHandle::connect(config, rows as u16, cols as u16)?;
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
-            terminal: Terminal::new(rows, cols, scrollback),
-            backend: PaneBackend::Ssh(ssh),
+            kind: PaneKind::Terminal {
+                terminal: Terminal::new(rows, cols, scrollback),
+                backend: PaneBackend::Ssh(ssh),
+            },
             alive: true,
         })
     }
 
+    pub fn new_sftp(sftp: SftpHandle) -> Self {
+        let panel = crate::ui::sftp_panel::SftpPanel::new(sftp);
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: PaneKind::Sftp { panel },
+            alive: true,
+        }
+    }
+
     pub fn poll(&mut self) {
-        match &mut self.backend {
-            PaneBackend::Local(pty) => {
-                while let Ok(data) = pty.reader_rx.try_recv() {
-                    self.terminal.feed(&data);
-                }
-                for reply in self.terminal.pending_replies.drain(..) {
-                    let _ = pty.write(&reply);
-                }
-                if !pty.is_alive() {
-                    self.alive = false;
+        match &mut self.kind {
+            PaneKind::Terminal { terminal, backend } => {
+                match backend {
+                    PaneBackend::Local(pty) => {
+                        while let Ok(data) = pty.reader_rx.try_recv() {
+                            terminal.feed(&data);
+                        }
+                        for reply in terminal.pending_replies.drain(..) {
+                            let _ = pty.write(&reply);
+                        }
+                        if !pty.is_alive() {
+                            self.alive = false;
+                        }
+                    }
+                    PaneBackend::Ssh(ssh) => {
+                        while let Ok(data) = ssh.reader_rx.try_recv() {
+                            terminal.feed(&data);
+                        }
+                        for reply in terminal.pending_replies.drain(..) {
+                            let _ = ssh.write(&reply);
+                        }
+                        if !ssh.is_alive() {
+                            self.alive = false;
+                        }
+                    }
                 }
             }
-            PaneBackend::Ssh(ssh) => {
-                while let Ok(data) = ssh.reader_rx.try_recv() {
-                    self.terminal.feed(&data);
-                }
-                for reply in self.terminal.pending_replies.drain(..) {
-                    let _ = ssh.write(&reply);
-                }
-                if !ssh.is_alive() {
+            PaneKind::Sftp { panel } => {
+                panel.poll();
+                if !panel.is_alive() {
                     self.alive = false;
                 }
             }
@@ -69,24 +97,33 @@ impl ChildPane {
     }
 
     pub fn write(&mut self, data: &[u8]) {
-        match &mut self.backend {
-            PaneBackend::Local(pty) => { let _ = pty.write(data); }
-            PaneBackend::Ssh(ssh) => { let _ = ssh.write(data); }
+        if let PaneKind::Terminal { backend, .. } = &mut self.kind {
+            match backend {
+                PaneBackend::Local(pty) => { let _ = pty.write(data); }
+                PaneBackend::Ssh(ssh) => { let _ = ssh.write(data); }
+            }
         }
     }
 
     pub fn resize(&mut self, rows: usize, cols: usize) {
-        self.terminal.resize(rows, cols);
-        match &self.backend {
-            PaneBackend::Local(pty) => pty.resize(rows as u16, cols as u16),
-            PaneBackend::Ssh(ssh) => ssh.resize(rows as u16, cols as u16),
+        if let PaneKind::Terminal { terminal, backend } = &mut self.kind {
+            terminal.resize(rows, cols);
+            match backend {
+                PaneBackend::Local(pty) => pty.resize(rows as u16, cols as u16),
+                PaneBackend::Ssh(ssh) => ssh.resize(rows as u16, cols as u16),
+            }
         }
     }
 
     pub fn close(&mut self) {
-        match &mut self.backend {
-            PaneBackend::Local(pty) => pty.kill(),
-            PaneBackend::Ssh(ssh) => ssh.disconnect(),
+        match &mut self.kind {
+            PaneKind::Terminal { backend, .. } => {
+                match backend {
+                    PaneBackend::Local(pty) => pty.kill(),
+                    PaneBackend::Ssh(ssh) => ssh.disconnect(),
+                }
+            }
+            PaneKind::Sftp { panel } => panel.close(),
         }
         self.alive = false;
     }
@@ -138,6 +175,17 @@ impl SplitLayout {
             return Err("Maximum 6 panes reached".into());
         }
         let pane = ChildPane::new_ssh(config, rows, cols, scrollback)?;
+        self.panes.push(pane);
+        self.direction = direction;
+        self.active_pane = self.panes.len() - 1;
+        Ok(())
+    }
+
+    pub fn add_sftp_pane(&mut self, sftp: SftpHandle, direction: SplitDirection) -> Result<(), Box<dyn std::error::Error>> {
+        if self.panes.len() >= 6 {
+            return Err("Maximum 6 panes reached".into());
+        }
+        let pane = ChildPane::new_sftp(sftp);
         self.panes.push(pane);
         self.direction = direction;
         self.active_pane = self.panes.len() - 1;
