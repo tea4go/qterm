@@ -131,6 +131,7 @@ impl eframe::App for QTermApp {
             }
         });
 
+        // Handle global shortcuts
         let mut action = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::H) && i.modifiers.ctrl && i.modifiers.shift {
@@ -223,7 +224,6 @@ impl eframe::App for QTermApp {
                 ui.horizontal_top(|ui| {
                     self.render_ribbon(ui);
                     if self.show_left_pane {
-                        ui.separator();
                         self.render_left_pane(ui);
                     }
                 });
@@ -382,35 +382,50 @@ enum Action {
     ToggleLeftPane,
 }
 
-// === Title Bar ===
+// ==================== Title Bar ====================
 
 impl QTermApp {
     fn render_title_bar(&mut self, ctx: &egui::Context) {
-        let sys = &self.theme.system;
         let title_bar_h = TITLE_BAR_HEIGHT;
+        let app_bg = self.theme.system.app_bg_color;
+        let header_text = self.theme.system.app_header_text_color;
+        let text_active = self.theme.system.text_active_color;
+        let hover_bg = self.theme.system.app_side_hover_bg_color;
+        let side_text = self.theme.system.app_side_text_color;
+        let text_color = self.theme.system.text_color;
+        let is_maximized = self.last_maximized;
 
         egui::TopBottomPanel::top("title_bar")
-            .frame(egui::Frame::none().fill(sys.app_bg_color))
+            .frame(egui::Frame::none().fill(app_bg))
             .exact_height(title_bar_h)
             .show(ctx, |ui| {
-                // Title bar is draggable for window movement
+                // Drag area for window movement
                 let title_bar_response = ui.interact(
                     ui.max_rect(),
                     egui::Id::new("title_bar_drag"),
                     egui::Sense::click_and_drag(),
                 );
                 if title_bar_response.double_clicked() {
-                    // Toggle maximize
-                    let _ = ctx.send_viewport_cmd(egui::ViewportCommand::ToggleMaximized);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                    self.last_maximized = !is_maximized;
                 }
                 if title_bar_response.dragged() {
-                    let _ = ctx.send_viewport_cmd(egui::ViewportCommand::StartInnerDrag);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
 
+                // Minimize / Maximize / Close buttons (top-right)
+                let btn_w = 40.0;
+                let btn_h = title_bar_h;
+                let total_btn_w = btn_w * 3.0;
+                let right_rect = egui::Rect::from_min_size(
+                    egui::Pos2::new(ui.max_rect().right() - total_btn_w, ui.max_rect().top()),
+                    egui::vec2(total_btn_w, btn_h),
+                );
+
+                // Title + Tabs (left side)
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    // Logo + title
                     ui.add_space(10.0);
-                    ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(16.0)).strong().color(sys.app_header_text_color));
+                    ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text));
                     ui.add_space(16.0);
 
                     // Card-style tabs
@@ -421,82 +436,77 @@ impl QTermApp {
                         let label = if tab.alive() { &tab.title } else { "[closed]" };
 
                         let (text_color, bg_color) = if selected {
-                            (sys.text_active_color, sys.app_side_hover_bg_color)
+                            (text_active, hover_bg)
                         } else {
-                            (sys.app_side_text_color, egui::Color32::TRANSPARENT)
+                            (side_text, egui::Color32::TRANSPARENT)
                         };
 
-                        let tab_resp = egui::Frame::none()
+                        let tab_frame = egui::Frame::none()
                             .fill(bg_color)
-                            .rounding(egui::Rounding::nw_ne(8.0))
-                            .show(ui, |ui| {
-                                ui.set_min_height(tab_h);
-                                ui.set_max_height(tab_h);
-                                ui.horizontal_centered(|ui| {
-                                    ui.add_space(8.0);
-                                    if ui.label(egui::RichText::new(label).color(text_color).size(13.0)).clicked() {
-                                        // tab click handled below
-                                    }
-                                    ui.add_space(4.0);
-                                    let close_btn = ui.add_s(egui::Button::new(
-                                        egui::RichText::new("x").size(11.0).color(text_color),
-                                    ).frame(false).desired_height(16.0).desired_width(20.0));
-                                    if close_btn.clicked() {
-                                        close_idx = Some(idx);
-                                    }
-                                    ui.add_space(4.0);
-                                })
-                            })
-                            .response;
+                            .rounding(egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 });
 
-                        if tab_resp.clicked() {
+                        let inner = tab_frame.show(ui, |ui| {
+                            ui.set_min_height(tab_h);
+                            ui.set_max_height(tab_h);
+                            ui.horizontal(|ui| {
+                                ui.add_space(5.0);
+                                ui.label(egui::RichText::new(label).color(text_color).size(13.0));
+                                ui.add_space(4.0);
+                                let close_btn = ui.add(egui::Button::new(
+                                    egui::RichText::new("x").size(11.0).color(text_color),
+                                ).frame(false).min_size(egui::vec2(30.0, 20.0)));
+                                if close_btn.clicked() {
+                                    close_idx = Some(idx);
+                                }
+                                ui.add_space(4.0);
+                            });
+                        });
+
+                        if inner.response.clicked() {
                             self.active_tab = idx;
                         }
                         ui.add_space(1.0);
                     }
 
                     // "+" button
-                    let plus_resp = ui.add_s(egui::Button::new(
-                        egui::RichText::new("+").size(16.0).color(sys.app_side_text_color),
-                    ).frame(false));
-                    if plus_resp.clicked() {
+                    if ui.add(egui::Button::new(
+                        egui::RichText::new("+").size(16.0).color(side_text),
+                    ).frame(false)).clicked() {
                         self.new_tab();
                     }
 
                     if let Some(idx) = close_idx {
                         self.close_tab(idx);
                     }
+                });
 
-                    // Push window controls to the right
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn_size = egui::vec2(46.0, title_bar_h);
-                        // Close button
-                        let close_hover = ui.rect_contains_pointer(ui.max_rect());
-                        let close_color = if close_hover {
-                            egui::Color32::from_rgb(196, 43, 28)
-                        } else {
-                            sys.text_color
-                        };
-                        if ui.put(egui::Rect::from_min_size(
-                            ui.max_rect().right_top() - egui::vec2(btn_size.x, 0.0),
-                            btn_size,
-                        ), egui::Button::new(
+                // Window control buttons (absolute positioned top-right)
+                use egui::ViewportCommand;
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // Minimize
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("-").size(13.0).color(text_color),
+                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
+                            ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                        }
+                        // Maximize
+                        let max_icon = if self.last_maximized { "❐" } else { "O" };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new(max_icon).size(13.0).color(text_color),
+                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
+                            ctx.send_viewport_cmd(ViewportCommand::Maximized(!self.last_maximized));
+                            self.last_maximized = !self.last_maximized;
+                        }
+                        // Close — text color changes on hover (not background fill)
+                        let close_color = if ui.rect_contains_pointer(egui::Rect::from_min_size(
+                            egui::Pos2::new(ui.max_rect().right() - btn_w, ui.max_rect().top()),
+                            egui::vec2(btn_w, btn_h),
+                        )) { egui::Color32::from_rgb(232, 17, 35) } else { text_color };
+                        if ui.add(egui::Button::new(
                             egui::RichText::new("x").size(13.0).color(close_color),
-                        ).frame(false).desired_size(btn_size)).clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        ui.add_space(46.0); // reserve space for close
-                        // Maximize button
-                        if ui.add_s(egui::Button::new(
-                            egui::RichText::new("O").size(13.0).color(sys.text_color),
-                        ).frame(false).desired_size(btn_size)).clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::ToggleMaximized);
-                        }
-                        // Minimize button
-                        if ui.add_s(egui::Button::new(
-                            egui::RichText::new("-").size(16.0).color(sys.text_color),
-                        ).frame(false).desired_size(btn_size)).clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimize);
+                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
+                            ctx.send_viewport_cmd(ViewportCommand::Close);
                         }
                     });
                 });
@@ -504,90 +514,84 @@ impl QTermApp {
     }
 }
 
-// === Ribbon (left icon bar) ===
+// ==================== Ribbon (left icon bar) ====================
 
 impl QTermApp {
     fn render_ribbon(&mut self, ui: &mut egui::Ui) {
-        let sys = &self.theme.system;
         let icon_size = RIBBON_WIDTH - 10.0;
+        let sider_bar_bg = self.theme.system.app_sider_bar_bg_color;
+        let split_color = self.theme.system.app_split_color;
+        let side_text_color = self.theme.system.app_side_text_color;
+        let hover_bg = self.theme.system.app_side_hover_bg_color;
+        let text_active = self.theme.system.app_side_text_active_color;
+        let is_dark = self.theme.is_dark();
 
         egui::Frame::none()
-            .fill(sys.app_sider_bar_bg_color)
-            .stroke(egui::Stroke::new(1.0, sys.app_split_color))
+            .fill(sider_bar_bg)
+            .stroke(egui::Stroke::new(1.0, split_color))
             .show(ui, |ui| {
                 ui.set_min_width(RIBBON_WIDTH);
                 ui.set_max_width(RIBBON_WIDTH);
                 ui.vertical(|ui| {
                     ui.add_space(5.0);
 
-                    // Terminal section button
+                    // Terminal
                     let terminal_active = self.ribbon_active == RibbonSection::Terminal;
-                    let terminal_resp = ribbon_button(ui, ">_", icon_size, terminal_active, sys);
-                    if terminal_resp.clicked() {
+                    let bg = if terminal_active { hover_bg } else { egui::Color32::TRANSPARENT };
+                    let fg = if terminal_active { text_active } else { side_text_color };
+                    if ui.add(
+                        egui::Button::new(egui::RichText::new(">_").size(RIBBON_WIDTH * 0.4).color(fg).strong())
+                            .frame(false).min_size(egui::vec2(icon_size, icon_size))
+                            .rounding(egui::Rounding::same(8.0)).fill(bg),
+                    ).clicked() {
                         self.ribbon_active = RibbonSection::Terminal;
                     }
 
-                    // SFTP section button
+                    // SFTP
                     let sftp_active = self.ribbon_active == RibbonSection::Sftp;
-                    let sftp_resp = ribbon_button(ui, "F", icon_size, sftp_active, sys);
-                    if sftp_resp.clicked() {
+                    let bg = if sftp_active { hover_bg } else { egui::Color32::TRANSPARENT };
+                    let fg = if sftp_active { text_active } else { side_text_color };
+                    if ui.add(
+                        egui::Button::new(egui::RichText::new("F").size(RIBBON_WIDTH * 0.4).color(fg).strong())
+                            .frame(false).min_size(egui::vec2(icon_size, icon_size))
+                            .rounding(egui::Rounding::same(8.0)).fill(bg),
+                    ).clicked() {
                         self.ribbon_active = RibbonSection::Sftp;
                     }
 
-                    // Spacer pushes bottom buttons down
+                    // Bottom: theme toggle
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        // Theme toggle
-                        let theme_icon = if self.theme.is_dark() { "L" } else { "D" };
-                        if ui.add_s(egui::Button::new(
-                            egui::RichText::new(theme_icon).size(14.0).color(sys.app_side_text_color),
-                        ).frame(false).desired_size(egui::vec2(30.0, 30.0))
+                        let theme_icon = if is_dark { "L" } else { "D" };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new(theme_icon).size(14.0).color(side_text_color),
+                        ).frame(false).min_size(egui::vec2(30.0, 30.0))
                          .rounding(egui::Rounding::same(4.0))).clicked() {
                             self.theme.toggle_mode();
                             self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark());
                         }
                         ui.add_space(2.0);
-
-                        // Settings button
-                        let settings_resp = ribbon_button(ui, "*", 30.0, false, sys);
-                        let _ = settings_resp;
-                        ui.add_space(5.0);
                     });
                 });
             });
     }
 }
 
-fn ribbon_button(ui: &mut egui::Ui, icon: &str, size: f32, active: bool, sys: &crate::theme::system::SystemTheme) -> egui::Response {
-    let (bg, fg) = if active {
-        (sys.app_side_hover_bg_color, sys.app_side_text_active_color)
-    } else {
-        (egui::Color32::TRANSPARENT, sys.app_side_text_color)
-    };
-    let resp = ui.add_s(
-        egui::Button::new(
-            egui::RichText::new(icon).size(size * 0.4).color(fg).strong(),
-        )
-        .frame(false)
-        .desired_size(egui::vec2(size, size))
-        .rounding(egui::Rounding::same(8.0))
-        .fill(bg),
-    );
-    resp
-}
-
-// === Left Pane ===
+// ==================== Left Pane ====================
 
 impl QTermApp {
     fn render_left_pane(&mut self, ui: &mut egui::Ui) {
-        let sys = &self.theme.system;
+        let left_list_bg = self.theme.system.app_left_list_bg_color;
+        let text_color = self.theme.system.text_color;
+
+        let split_color = self.theme.system.app_split_color;
 
         egui::Frame::none()
-            .fill(sys.app_left_list_bg_color)
+            .fill(left_list_bg)
+            .stroke(egui::Stroke::new(1.0, split_color))
             .show(ui, |ui| {
                 ui.set_min_width(LEFT_PANE_WIDTH);
                 ui.set_max_width(LEFT_PANE_WIDTH);
                 ui.vertical(|ui| {
-                    // Header
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let title = match self.ribbon_active {
@@ -595,7 +599,7 @@ impl QTermApp {
                             RibbonSection::Sftp => "SFTP",
                             RibbonSection::Settings => "Settings",
                         };
-                        ui.label(egui::RichText::new(title).strong().color(sys.text_color).size(14.0));
+                        ui.label(egui::RichText::new(title).strong().color(text_color).size(14.0));
                     });
                     ui.add_space(4.0);
                     ui.separator();
@@ -607,13 +611,13 @@ impl QTermApp {
                     }
 
                     // Bottom toolbar
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Left), |ui| {
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.button("+ New").clicked() {
+                            if ui.button("+ New SSH").clicked() {
                                 self.ssh_dialog.open = true;
                             }
-                            if ui.button("Local").clicked() {
+                            if ui.button("Local Term").clicked() {
                                 self.new_tab();
                             }
                         });
@@ -624,36 +628,38 @@ impl QTermApp {
     }
 
     fn render_terminal_pane(&mut self, ui: &mut egui::Ui) {
-        let sys = &self.theme.system;
+        let side_text = self.theme.system.app_side_text_color;
+        let text_color = self.theme.system.text_color;
+        let active_bg = self.theme.system.app_left_list_bg_color_active;
+        let active_fg = self.theme.system.app_left_list_text_color_active;
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Quick Connect").size(12.0).color(sys.app_side_text_color));
+            ui.label(egui::RichText::new("Quick Connect").size(12.0).color(side_text));
             ui.add_space(4.0);
             if ui.button("SSH Connection...").clicked() {
                 self.ssh_dialog.open = true;
             }
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Open Tabs").size(12.0).color(sys.app_side_text_color));
+            ui.label(egui::RichText::new("Open Tabs").size(12.0).color(side_text));
             ui.add_space(4.0);
             for (idx, tab) in self.tabs.iter().enumerate() {
                 let selected = idx == self.active_tab;
                 let label = if tab.alive() { &tab.title } else { "[closed]" };
                 let (bg, fg) = if selected {
-                    (sys.app_left_list_bg_color_active, sys.app_left_list_text_color_active)
+                    (active_bg, active_fg)
                 } else {
-                    (egui::Color32::TRANSPARENT, sys.text_color)
+                    (egui::Color32::TRANSPARENT, text_color)
                 };
-                let resp = egui::Frame::none()
+                let inner = egui::Frame::none()
                     .fill(bg)
                     .rounding(egui::Rounding::same(4.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
                             ui.label(egui::RichText::new(label).size(13.0).color(fg));
-                        })
-                    })
-                    .response;
-                if resp.clicked() {
+                        });
+                    });
+                if inner.response.clicked() {
                     self.active_tab = idx;
                 }
             }
@@ -661,22 +667,22 @@ impl QTermApp {
     }
 
     fn render_sftp_section(&mut self, ui: &mut egui::Ui) {
-        let sys = &self.theme.system;
+        let side_text = self.theme.system.app_side_text_color;
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("SFTP requires an SSH connection.").size(12.0).color(sys.app_side_text_color));
+            ui.label(egui::RichText::new("SFTP requires an SSH connection.").size(12.0).color(side_text));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Use Ctrl+Shift+F in an SSH tab to open SFTP.").size(11.0).color(sys.app_side_text_color));
+            ui.label(egui::RichText::new("Use Ctrl+Shift+F in an SSH tab to open SFTP.").size(11.0).color(side_text));
         });
     }
 
     fn render_settings_section(&mut self, ui: &mut egui::Ui) {
-        let sys = &self.theme.system;
+        let side_text = self.theme.system.app_side_text_color;
+        let is_dark = self.theme.is_dark();
         ui.vertical(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Theme").size(12.0).color(sys.app_side_text_color));
+            ui.label(egui::RichText::new("Theme").size(12.0).color(side_text));
             ui.add_space(4.0);
-            let is_dark = self.theme.is_dark();
             let label = if is_dark { "Switch to Light" } else { "Switch to Dark" };
             if ui.button(label).clicked() {
                 self.theme.toggle_mode();
@@ -686,45 +692,56 @@ impl QTermApp {
     }
 }
 
-// === FootBar (status bar) ===
+// ==================== FootBar (status bar) ====================
 
 impl QTermApp {
     fn render_foot_bar(&self, ctx: &egui::Context) {
-        let sys = &self.theme.system;
+        let status_bg = self.theme.system.app_status_bar_bg_color;
+        let split_color = self.theme.system.app_split_color;
+        let status_text = self.theme.system.app_status_bar_text_color;
+        let connected_color = self.theme.extra.term_connected_color;
         let height = self.theme.terminal.font_size * 2.0;
 
         egui::TopBottomPanel::bottom("foot_bar")
             .frame(egui::Frame::none()
-                .fill(sys.app_status_bar_bg_color)
-                .stroke(egui::Stroke::new(1.0, sys.app_split_color)))
+                .fill(status_bg)
+                .stroke(egui::Stroke::new(1.0, split_color)))
             .exact_height(height)
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add_space(9.0);
 
-                    // Connection status dot
+                    // Connection status dot (diameter = footerHeight/3)
                     let connected = self.tabs.get(self.active_tab).map_or(false, |t| t.alive());
                     let dot_color = if connected {
-                        self.theme.extra.term_connected_color
+                        connected_color
                     } else {
                         egui::Color32::from_rgb(200, 60, 60)
                     };
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 4.0, dot_color);
+                    let dot_diam = height / 3.0;
+                    let dot_radius = height / 6.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(dot_diam, dot_diam), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, dot_radius, dot_color);
 
                     ui.add_space(4.0);
 
                     // Session name
                     let session_name = self.tabs.get(self.active_tab).map_or("No session", |t| &t.title);
-                    ui.label(egui::RichText::new(session_name).size(12.0).color(sys.app_status_bar_text_color));
+                    ui.label(egui::RichText::new(session_name).size(12.0).color(status_text));
 
-                    // Right side: push buttons to the right
+                    // Pipe separator
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("|").size(12.0).color(status_text));
+                    ui.add_space(4.0);
+                    let extra_info = if connected { "connected" } else { "disconnected" };
+                    ui.label(egui::RichText::new(extra_info).size(12.0).color(status_text));
+
+                    // Right side: push to right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
-                        // Keyboard shortcut hints
                         ui.label(egui::RichText::new("Ctrl+T New | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B Panel")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgba_premultiplied(150, 150, 150, 180)));
+                            .size(15.0)
+                            .color(status_text));
                         ui.add_space(8.0);
                     });
                 });
@@ -732,7 +749,7 @@ impl QTermApp {
     }
 }
 
-// === SFTP open / Input handling (unchanged logic) ===
+// ==================== SFTP open / Input handling ====================
 
 impl QTermApp {
     fn handle_open_sftp(&mut self) {
