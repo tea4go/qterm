@@ -6,6 +6,9 @@ use crate::terminal::renderer;
 use crate::theme::AppTheme;
 use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
 
+const TITLE_BAR_HEIGHT: f32 = 40.0;
+const RIBBON_WIDTH: f32 = 50.0;
+const LEFT_PANE_WIDTH: f32 = 220.0;
 
 pub struct QTermApp {
     tabs: Vec<Tab>,
@@ -19,6 +22,15 @@ pub struct QTermApp {
     last_rows: usize,
     ssh_dialog: crate::ui::ssh_dialog::SshDialog,
     sftp_error: Option<String>,
+    show_left_pane: bool,
+    ribbon_active: RibbonSection,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum RibbonSection {
+    Terminal,
+    Sftp,
+    Settings,
 }
 
 impl QTermApp {
@@ -40,6 +52,8 @@ impl QTermApp {
             last_rows: 24,
             ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
             sftp_error: None,
+            show_left_pane: true,
+            ribbon_active: RibbonSection::Terminal,
         };
         app.new_tab();
         app
@@ -104,12 +118,10 @@ impl QTermApp {
 
 impl eframe::App for QTermApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Poll all tabs for PTY output
         for tab in &mut self.tabs {
             tab.poll();
         }
 
-        // Track window state for config persistence
         ctx.input(|i| {
             if let Some(rect) = i.viewport().inner_rect {
                 self.last_window_size = Some((rect.width(), rect.height()));
@@ -119,7 +131,6 @@ impl eframe::App for QTermApp {
             }
         });
 
-        // Handle global shortcuts
         let mut action = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::H) && i.modifiers.ctrl && i.modifiers.shift {
@@ -143,10 +154,7 @@ impl eframe::App for QTermApp {
             if i.key_pressed(egui::Key::ArrowDown) && i.modifiers.ctrl && !i.modifiers.shift {
                 action = Some(Action::NextPane);
             }
-            if i.key_pressed(egui::Key::T)
-                && i.modifiers.ctrl
-                && !i.modifiers.shift
-            {
+            if i.key_pressed(egui::Key::T) && i.modifiers.ctrl && !i.modifiers.shift {
                 action = Some(Action::NewTab);
             }
             if i.key_pressed(egui::Key::W) && i.modifiers.ctrl && !i.modifiers.shift {
@@ -155,13 +163,13 @@ impl eframe::App for QTermApp {
             if i.key_pressed(egui::Key::Tab) && i.modifiers.ctrl {
                 action = Some(Action::NextTab);
             }
+            if i.key_pressed(egui::Key::B) && i.modifiers.ctrl && !i.modifiers.shift {
+                action = Some(Action::ToggleLeftPane);
+            }
         });
         match action {
             Some(Action::NewTab) => self.new_tab(),
-            Some(Action::CloseTab) => {
-                let idx = self.active_tab;
-                self.close_tab(idx);
-            }
+            Some(Action::CloseTab) => { let idx = self.active_tab; self.close_tab(idx); }
             Some(Action::NextTab) => {
                 if !self.tabs.is_empty() {
                     self.active_tab = (self.active_tab + 1) % self.tabs.len();
@@ -193,44 +201,38 @@ impl eframe::App for QTermApp {
                     tab.layout.remove_pane(idx);
                 }
             }
-            Some(Action::OpenSshDialog) => {
-                self.ssh_dialog.open = true;
-            }
-            Some(Action::OpenSftp) => {
-                self.handle_open_sftp();
-            }
+            Some(Action::OpenSshDialog) => { self.ssh_dialog.open = true; }
+            Some(Action::OpenSftp) => { self.handle_open_sftp(); }
+            Some(Action::ToggleLeftPane) => { self.show_left_pane = !self.show_left_pane; }
             None => {}
         }
 
-        // Tab bar
-        egui::TopBottomPanel::top("tab_bar")
-            .frame(egui::Frame::none()
-                .fill(self.theme.system.app_bg_color)
-                .stroke(egui::Stroke::new(1.0, self.theme.system.app_split_color)))
+        // === Title Bar (40px) ===
+        self.render_title_bar(ctx);
+
+        // === Left SidePanel: Ribbon + LeftPane ===
+        let left_total = if self.show_left_pane {
+            RIBBON_WIDTH + LEFT_PANE_WIDTH
+        } else {
+            RIBBON_WIDTH
+        };
+        egui::SidePanel::left("left_panel")
+            .frame(egui::Frame::none())
+            .exact_width(left_total)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let mut close_idx = None;
-                    for (idx, tab) in self.tabs.iter().enumerate() {
-                        let selected = idx == self.active_tab;
-                        let label = if tab.alive() { &tab.title } else { "[closed]" };
-                        if ui.selectable_label(selected, label).clicked() {
-                            self.active_tab = idx;
-                        }
-                        if ui.small_button("x").clicked() {
-                            close_idx = Some(idx);
-                        }
+                ui.horizontal_top(|ui| {
+                    self.render_ribbon(ui);
+                    if self.show_left_pane {
                         ui.separator();
-                    }
-                    if ui.button("+").clicked() {
-                        self.new_tab();
-                    }
-                    if let Some(idx) = close_idx {
-                        self.close_tab(idx);
+                        self.render_left_pane(ui);
                     }
                 });
             });
 
-        // Central panel: terminal
+        // === FootBar (status bar) ===
+        self.render_foot_bar(ctx);
+
+        // === Central panel: terminal ===
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(self.theme.system.app_content_term_bg_color))
             .show(ctx, |ui| {
@@ -246,7 +248,6 @@ impl eframe::App for QTermApp {
                     tab.layout.pane_count()
                 };
 
-                // Calculate and apply terminal resize
                 let size = renderer::calculate_size(ui, self.theme.terminal.font_size);
                 let (target_rows, target_cols) = if pane_count <= 1 {
                     (size.rows, size.cols)
@@ -269,7 +270,6 @@ impl eframe::App for QTermApp {
 
                 let tab = &mut self.tabs[self.active_tab];
                 if pane_count <= 1 {
-                    // Single pane: full screen render
                     if let Some(pane) = tab.layout.active_pane_mut() {
                         match &mut pane.kind {
                             PaneKind::Terminal { terminal, .. } => {
@@ -281,7 +281,6 @@ impl eframe::App for QTermApp {
                         }
                     }
                 } else {
-                    // Multi-pane split rendering
                     let active_idx = tab.layout.active_pane;
                     match tab.layout.direction {
                         SplitDirection::Horizontal => {
@@ -342,10 +341,8 @@ impl eframe::App for QTermApp {
                 }
             });
 
-        // Show SSH dialog
         self.ssh_dialog.show(ctx);
 
-        // Handle SSH dialog result
         if let Some(config) = self.ssh_dialog.result.take() {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 if let Err(e) = tab.layout.add_ssh_pane(config, SplitDirection::Horizontal, self.last_rows, self.last_cols, self.config.scrollback_lines) {
@@ -355,10 +352,7 @@ impl eframe::App for QTermApp {
             }
         }
 
-        // Handle keyboard input via raw events
         self.handle_input(ctx);
-
-        // Keep repainting for terminal updates
         ctx.request_repaint();
     }
 
@@ -385,35 +379,377 @@ enum Action {
     ClosePane,
     OpenSshDialog,
     OpenSftp,
+    ToggleLeftPane,
 }
+
+// === Title Bar ===
+
+impl QTermApp {
+    fn render_title_bar(&mut self, ctx: &egui::Context) {
+        let sys = &self.theme.system;
+        let title_bar_h = TITLE_BAR_HEIGHT;
+
+        egui::TopBottomPanel::top("title_bar")
+            .frame(egui::Frame::none().fill(sys.app_bg_color))
+            .exact_height(title_bar_h)
+            .show(ctx, |ui| {
+                // Title bar is draggable for window movement
+                let title_bar_response = ui.interact(
+                    ui.max_rect(),
+                    egui::Id::new("title_bar_drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if title_bar_response.double_clicked() {
+                    // Toggle maximize
+                    let _ = ctx.send_viewport_cmd(egui::ViewportCommand::ToggleMaximized);
+                }
+                if title_bar_response.dragged() {
+                    let _ = ctx.send_viewport_cmd(egui::ViewportCommand::StartInnerDrag);
+                }
+
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // Logo + title
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(16.0)).strong().color(sys.app_header_text_color));
+                    ui.add_space(16.0);
+
+                    // Card-style tabs
+                    let mut close_idx = None;
+                    let tab_h = title_bar_h - 6.0;
+                    for (idx, tab) in self.tabs.iter().enumerate() {
+                        let selected = idx == self.active_tab;
+                        let label = if tab.alive() { &tab.title } else { "[closed]" };
+
+                        let (text_color, bg_color) = if selected {
+                            (sys.text_active_color, sys.app_side_hover_bg_color)
+                        } else {
+                            (sys.app_side_text_color, egui::Color32::TRANSPARENT)
+                        };
+
+                        let tab_resp = egui::Frame::none()
+                            .fill(bg_color)
+                            .rounding(egui::Rounding::nw_ne(8.0))
+                            .show(ui, |ui| {
+                                ui.set_min_height(tab_h);
+                                ui.set_max_height(tab_h);
+                                ui.horizontal_centered(|ui| {
+                                    ui.add_space(8.0);
+                                    if ui.label(egui::RichText::new(label).color(text_color).size(13.0)).clicked() {
+                                        // tab click handled below
+                                    }
+                                    ui.add_space(4.0);
+                                    let close_btn = ui.add_s(egui::Button::new(
+                                        egui::RichText::new("x").size(11.0).color(text_color),
+                                    ).frame(false).desired_height(16.0).desired_width(20.0));
+                                    if close_btn.clicked() {
+                                        close_idx = Some(idx);
+                                    }
+                                    ui.add_space(4.0);
+                                })
+                            })
+                            .response;
+
+                        if tab_resp.clicked() {
+                            self.active_tab = idx;
+                        }
+                        ui.add_space(1.0);
+                    }
+
+                    // "+" button
+                    let plus_resp = ui.add_s(egui::Button::new(
+                        egui::RichText::new("+").size(16.0).color(sys.app_side_text_color),
+                    ).frame(false));
+                    if plus_resp.clicked() {
+                        self.new_tab();
+                    }
+
+                    if let Some(idx) = close_idx {
+                        self.close_tab(idx);
+                    }
+
+                    // Push window controls to the right
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn_size = egui::vec2(46.0, title_bar_h);
+                        // Close button
+                        let close_hover = ui.rect_contains_pointer(ui.max_rect());
+                        let close_color = if close_hover {
+                            egui::Color32::from_rgb(196, 43, 28)
+                        } else {
+                            sys.text_color
+                        };
+                        if ui.put(egui::Rect::from_min_size(
+                            ui.max_rect().right_top() - egui::vec2(btn_size.x, 0.0),
+                            btn_size,
+                        ), egui::Button::new(
+                            egui::RichText::new("x").size(13.0).color(close_color),
+                        ).frame(false).desired_size(btn_size)).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        ui.add_space(46.0); // reserve space for close
+                        // Maximize button
+                        if ui.add_s(egui::Button::new(
+                            egui::RichText::new("O").size(13.0).color(sys.text_color),
+                        ).frame(false).desired_size(btn_size)).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::ToggleMaximized);
+                        }
+                        // Minimize button
+                        if ui.add_s(egui::Button::new(
+                            egui::RichText::new("-").size(16.0).color(sys.text_color),
+                        ).frame(false).desired_size(btn_size)).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimize);
+                        }
+                    });
+                });
+            });
+    }
+}
+
+// === Ribbon (left icon bar) ===
+
+impl QTermApp {
+    fn render_ribbon(&mut self, ui: &mut egui::Ui) {
+        let sys = &self.theme.system;
+        let icon_size = RIBBON_WIDTH - 10.0;
+
+        egui::Frame::none()
+            .fill(sys.app_sider_bar_bg_color)
+            .stroke(egui::Stroke::new(1.0, sys.app_split_color))
+            .show(ui, |ui| {
+                ui.set_min_width(RIBBON_WIDTH);
+                ui.set_max_width(RIBBON_WIDTH);
+                ui.vertical(|ui| {
+                    ui.add_space(5.0);
+
+                    // Terminal section button
+                    let terminal_active = self.ribbon_active == RibbonSection::Terminal;
+                    let terminal_resp = ribbon_button(ui, ">_", icon_size, terminal_active, sys);
+                    if terminal_resp.clicked() {
+                        self.ribbon_active = RibbonSection::Terminal;
+                    }
+
+                    // SFTP section button
+                    let sftp_active = self.ribbon_active == RibbonSection::Sftp;
+                    let sftp_resp = ribbon_button(ui, "F", icon_size, sftp_active, sys);
+                    if sftp_resp.clicked() {
+                        self.ribbon_active = RibbonSection::Sftp;
+                    }
+
+                    // Spacer pushes bottom buttons down
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                        // Theme toggle
+                        let theme_icon = if self.theme.is_dark() { "L" } else { "D" };
+                        if ui.add_s(egui::Button::new(
+                            egui::RichText::new(theme_icon).size(14.0).color(sys.app_side_text_color),
+                        ).frame(false).desired_size(egui::vec2(30.0, 30.0))
+                         .rounding(egui::Rounding::same(4.0))).clicked() {
+                            self.theme.toggle_mode();
+                            self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark());
+                        }
+                        ui.add_space(2.0);
+
+                        // Settings button
+                        let settings_resp = ribbon_button(ui, "*", 30.0, false, sys);
+                        let _ = settings_resp;
+                        ui.add_space(5.0);
+                    });
+                });
+            });
+    }
+}
+
+fn ribbon_button(ui: &mut egui::Ui, icon: &str, size: f32, active: bool, sys: &crate::theme::system::SystemTheme) -> egui::Response {
+    let (bg, fg) = if active {
+        (sys.app_side_hover_bg_color, sys.app_side_text_active_color)
+    } else {
+        (egui::Color32::TRANSPARENT, sys.app_side_text_color)
+    };
+    let resp = ui.add_s(
+        egui::Button::new(
+            egui::RichText::new(icon).size(size * 0.4).color(fg).strong(),
+        )
+        .frame(false)
+        .desired_size(egui::vec2(size, size))
+        .rounding(egui::Rounding::same(8.0))
+        .fill(bg),
+    );
+    resp
+}
+
+// === Left Pane ===
+
+impl QTermApp {
+    fn render_left_pane(&mut self, ui: &mut egui::Ui) {
+        let sys = &self.theme.system;
+
+        egui::Frame::none()
+            .fill(sys.app_left_list_bg_color)
+            .show(ui, |ui| {
+                ui.set_min_width(LEFT_PANE_WIDTH);
+                ui.set_max_width(LEFT_PANE_WIDTH);
+                ui.vertical(|ui| {
+                    // Header
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let title = match self.ribbon_active {
+                            RibbonSection::Terminal => "Terminal",
+                            RibbonSection::Sftp => "SFTP",
+                            RibbonSection::Settings => "Settings",
+                        };
+                        ui.label(egui::RichText::new(title).strong().color(sys.text_color).size(14.0));
+                    });
+                    ui.add_space(4.0);
+                    ui.separator();
+
+                    match self.ribbon_active {
+                        RibbonSection::Terminal => self.render_terminal_pane(ui),
+                        RibbonSection::Sftp => self.render_sftp_section(ui),
+                        RibbonSection::Settings => self.render_settings_section(ui),
+                    }
+
+                    // Bottom toolbar
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Left), |ui| {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("+ New").clicked() {
+                                self.ssh_dialog.open = true;
+                            }
+                            if ui.button("Local").clicked() {
+                                self.new_tab();
+                            }
+                        });
+                        ui.add_space(2.0);
+                    });
+                });
+            });
+    }
+
+    fn render_terminal_pane(&mut self, ui: &mut egui::Ui) {
+        let sys = &self.theme.system;
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Quick Connect").size(12.0).color(sys.app_side_text_color));
+            ui.add_space(4.0);
+            if ui.button("SSH Connection...").clicked() {
+                self.ssh_dialog.open = true;
+            }
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Open Tabs").size(12.0).color(sys.app_side_text_color));
+            ui.add_space(4.0);
+            for (idx, tab) in self.tabs.iter().enumerate() {
+                let selected = idx == self.active_tab;
+                let label = if tab.alive() { &tab.title } else { "[closed]" };
+                let (bg, fg) = if selected {
+                    (sys.app_left_list_bg_color_active, sys.app_left_list_text_color_active)
+                } else {
+                    (egui::Color32::TRANSPARENT, sys.text_color)
+                };
+                let resp = egui::Frame::none()
+                    .fill(bg)
+                    .rounding(egui::Rounding::same(4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new(label).size(13.0).color(fg));
+                        })
+                    })
+                    .response;
+                if resp.clicked() {
+                    self.active_tab = idx;
+                }
+            }
+        });
+    }
+
+    fn render_sftp_section(&mut self, ui: &mut egui::Ui) {
+        let sys = &self.theme.system;
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("SFTP requires an SSH connection.").size(12.0).color(sys.app_side_text_color));
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Use Ctrl+Shift+F in an SSH tab to open SFTP.").size(11.0).color(sys.app_side_text_color));
+        });
+    }
+
+    fn render_settings_section(&mut self, ui: &mut egui::Ui) {
+        let sys = &self.theme.system;
+        ui.vertical(|ui| {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Theme").size(12.0).color(sys.app_side_text_color));
+            ui.add_space(4.0);
+            let is_dark = self.theme.is_dark();
+            let label = if is_dark { "Switch to Light" } else { "Switch to Dark" };
+            if ui.button(label).clicked() {
+                self.theme.toggle_mode();
+                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark());
+            }
+        });
+    }
+}
+
+// === FootBar (status bar) ===
+
+impl QTermApp {
+    fn render_foot_bar(&self, ctx: &egui::Context) {
+        let sys = &self.theme.system;
+        let height = self.theme.terminal.font_size * 2.0;
+
+        egui::TopBottomPanel::bottom("foot_bar")
+            .frame(egui::Frame::none()
+                .fill(sys.app_status_bar_bg_color)
+                .stroke(egui::Stroke::new(1.0, sys.app_split_color)))
+            .exact_height(height)
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add_space(9.0);
+
+                    // Connection status dot
+                    let connected = self.tabs.get(self.active_tab).map_or(false, |t| t.alive());
+                    let dot_color = if connected {
+                        self.theme.extra.term_connected_color
+                    } else {
+                        egui::Color32::from_rgb(200, 60, 60)
+                    };
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 4.0, dot_color);
+
+                    ui.add_space(4.0);
+
+                    // Session name
+                    let session_name = self.tabs.get(self.active_tab).map_or("No session", |t| &t.title);
+                    ui.label(egui::RichText::new(session_name).size(12.0).color(sys.app_status_bar_text_color));
+
+                    // Right side: push buttons to the right
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(8.0);
+                        // Keyboard shortcut hints
+                        ui.label(egui::RichText::new("Ctrl+T New | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B Panel")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgba_premultiplied(150, 150, 150, 180)));
+                        ui.add_space(8.0);
+                    });
+                });
+            });
+    }
+}
+
+// === SFTP open / Input handling (unchanged logic) ===
 
 impl QTermApp {
     fn handle_open_sftp(&mut self) {
         let sftp_result = {
             let tab = match self.tabs.get(self.active_tab) {
                 Some(t) => t,
-                None => {
-                    self.sftp_error = Some("No active tab".to_string());
-                    return;
-                }
+                None => { self.sftp_error = Some("No active tab".to_string()); return; }
             };
             let active_idx = tab.layout.active_pane;
             match tab.layout.panes.get(active_idx) {
                 Some(pane) => {
                     match &pane.kind {
-                        PaneKind::Terminal { backend: PaneBackend::Ssh(ssh), .. } => {
-                            ssh.open_sftp()
-                        }
-                        _ => {
-                            self.sftp_error = Some("SFTP requires an active SSH terminal pane".to_string());
-                            return;
-                        }
+                        PaneKind::Terminal { backend: PaneBackend::Ssh(ssh), .. } => ssh.open_sftp(),
+                        _ => { self.sftp_error = Some("SFTP requires an active SSH terminal pane".to_string()); return; }
                     }
                 }
-                None => {
-                    self.sftp_error = Some("No active pane".to_string());
-                    return;
-                }
+                None => { self.sftp_error = Some("No active pane".to_string()); return; }
             }
         };
 
@@ -426,9 +762,7 @@ impl QTermApp {
                 }
                 self.sftp_error = None;
             }
-            Err(e) => {
-                self.sftp_error = Some(format!("SFTP error: {}", e));
-            }
+            Err(e) => { self.sftp_error = Some(format!("SFTP error: {}", e)); }
         }
     }
 
@@ -442,10 +776,8 @@ impl QTermApp {
             None => return,
         };
 
-        // Only send keyboard input to terminal panes
         match &mut pane.kind {
             PaneKind::Terminal { terminal, backend } => {
-                // Ensure no widget steals keyboard focus from the terminal
                 if ctx.memory(|m| m.focused().is_some()) {
                     ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
                 }
@@ -459,12 +791,7 @@ impl QTermApp {
                                     PaneBackend::Ssh(ssh) => { let _ = ssh.write(text.as_bytes()); }
                                 }
                             }
-                            egui::Event::Key {
-                                key,
-                                pressed: true,
-                                modifiers,
-                                ..
-                            } => {
+                            egui::Event::Key { key, pressed: true, modifiers, .. } => {
                                 if let Some(seq) = key_to_seq(*key, *modifiers) {
                                     match backend {
                                         PaneBackend::Local(pty) => { let _ = pty.write(seq.as_bytes()); }
@@ -492,29 +819,18 @@ impl QTermApp {
 fn key_to_seq(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
     if mods.ctrl {
         let ctrl_char = match key {
-            egui::Key::A => Some("\x01"),
-            egui::Key::B => Some("\x02"),
-            egui::Key::C => Some("\x03"),
-            egui::Key::D => Some("\x04"),
-            egui::Key::E => Some("\x05"),
-            egui::Key::F => Some("\x06"),
-            egui::Key::G => Some("\x07"),
-            egui::Key::H => Some("\x08"),
-            egui::Key::K => Some("\x0B"),
-            egui::Key::L => Some("\x0C"),
-            egui::Key::N => Some("\x0E"),
-            egui::Key::O => Some("\x0F"),
-            egui::Key::P => Some("\x10"),
-            egui::Key::Q => Some("\x11"),
-            egui::Key::R => Some("\x12"),
-            egui::Key::S => Some("\x13"),
-            egui::Key::U => Some("\x15"),
-            egui::Key::Z => Some("\x1A"),
+            egui::Key::A => Some("\x01"), egui::Key::B => Some("\x02"),
+            egui::Key::C => Some("\x03"), egui::Key::D => Some("\x04"),
+            egui::Key::E => Some("\x05"), egui::Key::F => Some("\x06"),
+            egui::Key::G => Some("\x07"), egui::Key::H => Some("\x08"),
+            egui::Key::K => Some("\x0B"), egui::Key::L => Some("\x0C"),
+            egui::Key::N => Some("\x0E"), egui::Key::O => Some("\x0F"),
+            egui::Key::P => Some("\x10"), egui::Key::Q => Some("\x11"),
+            egui::Key::R => Some("\x12"), egui::Key::S => Some("\x13"),
+            egui::Key::U => Some("\x15"), egui::Key::Z => Some("\x1A"),
             _ => None,
         };
-        if let Some(s) = ctrl_char {
-            return Some(s.to_string());
-        }
+        if let Some(s) = ctrl_char { return Some(s.to_string()); }
     }
 
     match key {

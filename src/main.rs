@@ -45,6 +45,7 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("QTerm")
+        .with_decorations(false)
         .with_min_inner_size([800.0, 500.0]);
 
     let w = cfg.window_width.unwrap_or(1100.0).max(800.0);
