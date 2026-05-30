@@ -203,28 +203,32 @@ impl eframe::App for QTermApp {
         }
 
         // Tab bar
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let mut close_idx = None;
-                for (idx, tab) in self.tabs.iter().enumerate() {
-                    let selected = idx == self.active_tab;
-                    let label = if tab.alive() { &tab.title } else { "[closed]" };
-                    if ui.selectable_label(selected, label).clicked() {
-                        self.active_tab = idx;
+        egui::TopBottomPanel::top("tab_bar")
+            .frame(egui::Frame::none()
+                .fill(self.theme.system.app_bg_color)
+                .stroke(egui::Stroke::new(1.0, self.theme.system.app_split_color)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let mut close_idx = None;
+                    for (idx, tab) in self.tabs.iter().enumerate() {
+                        let selected = idx == self.active_tab;
+                        let label = if tab.alive() { &tab.title } else { "[closed]" };
+                        if ui.selectable_label(selected, label).clicked() {
+                            self.active_tab = idx;
+                        }
+                        if ui.small_button("x").clicked() {
+                            close_idx = Some(idx);
+                        }
+                        ui.separator();
                     }
-                    if ui.small_button("x").clicked() {
-                        close_idx = Some(idx);
+                    if ui.button("+").clicked() {
+                        self.new_tab();
                     }
-                    ui.separator();
-                }
-                if ui.button("+").clicked() {
-                    self.new_tab();
-                }
-                if let Some(idx) = close_idx {
-                    self.close_tab(idx);
-                }
+                    if let Some(idx) = close_idx {
+                        self.close_tab(idx);
+                    }
+                });
             });
-        });
 
         // Central panel: terminal
         egui::CentralPanel::default()
@@ -286,7 +290,7 @@ impl eframe::App for QTermApp {
                             for (idx, pane) in tab.layout.panes.iter_mut().enumerate() {
                                 let is_active = idx == active_idx;
                                 let stroke = if is_active {
-                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
+                                    egui::Stroke::new(1.0, self.theme.system.text_active_color)
                                 } else {
                                     egui::Stroke::NONE
                                 };
@@ -313,7 +317,7 @@ impl eframe::App for QTermApp {
                                 for (idx, pane) in tab.layout.panes.iter_mut().enumerate() {
                                     let is_active = idx == active_idx;
                                     let stroke = if is_active {
-                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 200))
+                                        egui::Stroke::new(1.0, self.theme.system.text_active_color)
                                     } else {
                                         egui::Stroke::NONE
                                     };

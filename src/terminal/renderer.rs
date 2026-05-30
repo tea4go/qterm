@@ -97,11 +97,19 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) {
             Pos2::new(cx, cy),
             Vec2::new(cell_width, cell_height),
         );
-        painter.rect_filled(
-            cursor_rect,
-            0.0,
-            Color32::from_rgba_premultiplied(200, 200, 200, 180),
-        );
+        painter.rect_filled(cursor_rect, 0.0, theme.cursor);
+        if terminal.cursor.col < terminal.cols() {
+            let ch = terminal.grid.row(terminal.cursor.row)[terminal.cursor.col].ch;
+            if ch != ' ' {
+                painter.text(
+                    Pos2::new(cx, cy),
+                    egui::Align2::LEFT_TOP,
+                    ch.to_string(),
+                    font_id.clone(),
+                    theme.cursor_accent,
+                );
+            }
+        }
     }
 }
 

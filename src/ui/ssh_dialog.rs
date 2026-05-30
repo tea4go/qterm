@@ -85,7 +85,7 @@ impl SshDialog {
                 });
 
                 if let Some(status) = &self.status {
-                    ui.colored_label(egui::Color32::from_rgb(255, 100, 100), status);
+                    ui.colored_label(ui.visuals().error_fg_color, status);
                 }
 
                 ui.separator();

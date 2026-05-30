@@ -157,7 +157,7 @@ impl SftpPanel {
             }
         });
         ui.label(
-            egui::RichText::new(&self.local_path).small().color(egui::Color32::GRAY),
+            egui::RichText::new(&self.local_path).small().color(egui::Color32::from_rgba_premultiplied(180, 180, 180, 200)),
         );
 
         let mut navigate_idx = None;
