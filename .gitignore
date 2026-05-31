@@ -22,3 +22,4 @@ target
 *.png
 WhaleTerm界面原型/*
 whaleterm_*.md
+debug*.txt

@@ -46,13 +46,9 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
     let cell_height = theme.font_size * 1.4;
 
-    let available = ui.available_size();
-    let render_width = available.x.max(terminal.cols() as f32 * cell_width);
-    let render_height = available.y.max(terminal.rows() as f32 * cell_height);
-
     // 分配绘制区域和交互感知
     let (response, painter) = ui.allocate_painter(
-        Vec2::new(render_width, render_height),
+        ui.available_size(),
         egui::Sense::click_and_drag(),
     );
     let origin = response.rect.min;

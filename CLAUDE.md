@@ -98,3 +98,59 @@ main.rs → QTermApp (app.rs)
 - `Ctrl+Shift+F` — 从活动 SSH 面板打开 SFTP
 - `Ctrl+/-` — 字体缩放
 - 左侧图标栏 `L/D` 按钮 — 切换浅色/深色主题
+
+## 窗口位置管理
+
+支持记忆上次窗口位置，启动时自动恢复，支持命令行参数覆盖。
+
+### 命令行参数
+
+| 参数 | 示例 | 说明 |
+|------|------|------|
+| 无参数 | `qterm` | 恢复上次关闭时的位置和大小 |
+| `--reset` | `qterm --reset` | 窗口重置为 1200×800，主屏居中 |
+| `--setpos` | `qterm --setpos 3840,222` | 定位到指定物理像素坐标 |
+
+优先级：`--reset` > `--setpos` > 配置文件恢复 > 系统默认
+
+### 坐标单位
+
+- `window_x` / `window_y`：**物理像素**（保存和读取时乘/除 `pixels_per_point()`）
+- `window_width` / `window_height`：**egui points**（`inner_rect` / `with_inner_size` 直接使用）
+
+### 延迟定位（第 2 帧）
+
+窗口位置在 `update()` 的**第 2 帧**才通过 `ViewportCommand::OuterPosition` 设置，原因是第 1 帧 DPI 缩放因子尚未准确。
+
+### 实现位置
+
+- `src/main.rs` — 启动入口：命令行解析、`is_position_visible()`、`primary_monitor_center()`
+- `src/app.rs` — 第 2 帧延迟定位（`frame_count == 2`）、每帧追踪位置、`on_exit()` 保存
+- `src/config.rs` — `AppConfig` 读写 `window_x/y/width/height/maximized`
+
+### 诊断日志
+
+启动过程写入 `%APPDATA%/qterm/startup.log`，记录显示器信息、配置读取、位置可见性判断。
+
+---
+
+## egui 布局经验与陷阱
+
+### SidePanel 宽度被内容撑大（黑色区域问题）
+
+**现象**：左侧面板与终端区域之间出现大块黑色空白区域。
+
+**根本原因**：egui `SidePanel` 虽然设置了 `.exact_width(N)`，但面板内部若有 widget 通过 `ui.label(galley)` 或 `ui.allocate_exact_size(vec2(ui.available_width(), h), ...)` 请求了超出 N 的布局宽度，SidePanel 的实际布局宽度会被撑大。SidePanel 的 frame 只绘制设定宽度范围，超出部分既不属于 SidePanel 也不属于 CentralPanel，窗口底层背景色（黑色）就会裸露出来。
+
+**诊断方法**：
+1. 在 `renderer::render` 里打印 `ui.available_rect_before_wrap().min.x`，若该值远大于 `LEFT_PANE_WIDTH`，说明 SidePanel 被撑大。
+2. 把 SidePanel frame fill 改成红色，黑色区域不变红 → 确认是 SidePanel 布局超出 frame 区域；把 CentralPanel frame fill 改成红色，黑色区域不变红 → 确认不是 CentralPanel 背景。
+
+**修复规则**：
+- **禁止**在 SidePanel 内用 `ui.allocate_exact_size(vec2(ui.available_width(), h), ...)` —— 第一帧 `ui.available_width()` 可能返回整个窗口宽度。
+  改为：`let w = ui.available_width().min(LEFT_PANE_WIDTH);`
+- **禁止**在 SidePanel 内用 `ui.label(galley)` 渲染可能很长的文本（如路径、标签标题）—— label 会按 galley 实际宽度请求布局空间。
+  改为：用 `ui.allocate_exact_size(vec2(固定宽, h), ...)` 分配区域 + `painter.text(...)` 直接绘制。
+- **禁止** `ScrollArea::vertical().auto_shrink([false, true])`（水平不收缩），改为 `auto_shrink([true, true])` 并设置 `.max_width(LEFT_PANE_WIDTH)`。
+- SidePanel 需加 `.resizable(false)`，防止 resize handle 占用额外布局空间。
+- 在 SidePanel show closure 开头调用 `ui.set_clip_rect(ui.max_rect())` 做视觉兜底裁剪。

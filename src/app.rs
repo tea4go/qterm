@@ -467,14 +467,18 @@ impl eframe::App for QTermApp {
         if self.show_left_pane {
             egui::SidePanel::left("left_panel")
                 .frame(egui::Frame {
-                    fill: egui::Color32::RED,
+                    fill: self.theme.system.app_bg_color,
                     inner_margin: egui::Margin::same(0.0),
                     outer_margin: egui::Margin::same(0.0),
                     ..Default::default()
                 })
                 .exact_width(LEFT_PANE_WIDTH)
+                .resizable(false)
                 .show_separator_line(false)
                 .show(ctx, |ui| {
+                    // 强制限制宽度并裁剪超出内容，防止面板撑大
+                    let clip = ui.max_rect();
+                    ui.set_clip_rect(clip);
                     self.render_left_pane(ui);
                 });
         }
@@ -862,7 +866,8 @@ impl QTermApp {
 
         // 使用 ScrollArea 包裹连接列表，支持滚动
         egui::ScrollArea::vertical()
-            .auto_shrink([false, true])
+            .auto_shrink([true, true])
+            .max_width(LEFT_PANE_WIDTH)
             .show(ui, |ui| {
             ui.add_space(8.0);
 
@@ -900,10 +905,11 @@ impl QTermApp {
 
                     let is_selected = self.selected_connection == Some(idx);
 
-                    // 预分配交互区域以获取悬停状态
+                    // 预分配交互区域以获取悬停状态（固定宽度避免撑大左侧面板）
                     let item_h = fs * 1.5;
+                    let item_w = ui.available_width().min(LEFT_PANE_WIDTH);
                     let (rect, resp) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), item_h),
+                        egui::vec2(item_w, item_h),
                         egui::Sense::click(),
                     );
                     let bg = if is_selected {
@@ -950,16 +956,25 @@ impl QTermApp {
                 } else {
                     (egui::Color32::TRANSPARENT, text_color)
                 };
-                let inner = egui::Frame::none()
-                    .fill(bg)
-                    .rounding(egui::Rounding::same(4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_space(6.0);
-                            self.sidebar_label(ui, label, fs, fg);
-                        });
-                    });
-                if inner.response.clicked() {
+                // 使用固定宽度分配，避免长标题撑大面板
+                let item_h = fs * 1.6;
+                let item_w = ui.available_width().min(LEFT_PANE_WIDTH);
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(item_w, item_h),
+                    egui::Sense::click(),
+                );
+                if bg != egui::Color32::TRANSPARENT {
+                    ui.painter().rect_filled(rect, 4.0, bg);
+                }
+                // 用 painter.text 直接绘制，不影响布局宽度
+                ui.painter().text(
+                    egui::Pos2::new(rect.min.x + 6.0, rect.min.y + (item_h - fs) * 0.5),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    self.sidebar_font_id(fs),
+                    fg,
+                );
+                if resp.clicked() {
                     self.active_tab = idx;
                 }
             }
