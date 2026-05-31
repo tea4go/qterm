@@ -517,6 +517,80 @@ impl eframe::App for QTermApp {
                     return;
                 }
 
+                // === 终端标签栏 ===
+                let mut close_idx = None;
+                let tab_bar_h: f32 = 32.0;
+                let tab_bg = self.theme.system.app_bg_color;
+                let text_active = self.theme.system.text_active_color;
+                let hover_bg = self.theme.system.app_side_hover_bg_color;
+                let side_text = self.theme.system.app_side_text_color;
+
+                egui::Frame::none()
+                    .fill(tab_bg)
+                    .show(ui, |ui| {
+                        ui.set_min_height(tab_bar_h);
+                        ui.set_max_height(tab_bar_h);
+                        ui.horizontal(|ui| {
+                            ui.add_space(4.0);
+                            for (idx, tab) in self.tabs.iter().enumerate() {
+                                let selected = idx == self.active_tab;
+                                let label = if tab.alive() { &tab.title } else { "[已关闭]" };
+
+                                let (fg, bg) = if selected {
+                                    (text_active, hover_bg)
+                                } else {
+                                    (side_text, egui::Color32::TRANSPARENT)
+                                };
+
+                                let tab_frame = egui::Frame::none()
+                                    .fill(bg)
+                                    .rounding(egui::Rounding { nw: 6.0, ne: 6.0, sw: 0.0, se: 0.0 });
+
+                                let inner = tab_frame.show(ui, |ui| {
+                                    ui.set_min_height(tab_bar_h - 4.0);
+                                    ui.set_max_height(tab_bar_h - 4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new(label).color(fg).size(12.0));
+                                        ui.add_space(4.0);
+                                        // 关闭标签按钮
+                                        let close_btn = ui.add(egui::Button::new(
+                                            egui::RichText::new("x").size(10.0).color(fg),
+                                        ).frame(false).min_size(egui::vec2(20.0, 16.0)));
+                                        if close_btn.clicked() {
+                                            close_idx = Some(idx);
+                                        }
+                                        close_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                        ui.add_space(4.0);
+                                    });
+                                });
+
+                                // 点击标签页切换活动标签
+                                if inner.response.clicked() {
+                                    self.active_tab = idx;
+                                }
+                                inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                ui.add_space(1.0);
+                            }
+
+                            // "+" 新建标签按钮
+                            let add_btn = ui.add(egui::Button::new(
+                                egui::RichText::new("+").size(14.0).color(side_text),
+                            ).frame(false));
+                            if add_btn.clicked() {
+                                self.new_tab();
+                            }
+                            add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        });
+                    });
+
+                // 处理关闭标签
+                if let Some(idx) = close_idx {
+                    self.close_tab(idx);
+                }
+
+                // === 终端内容区域 ===
+
                 // 计算当前活动标签页的面板数和终端尺寸
                 let pane_count = {
                     let tab = &self.tabs[self.active_tab];
@@ -690,9 +764,6 @@ impl QTermApp {
         let title_bar_h = TITLE_BAR_HEIGHT;
         let app_bg = self.theme.system.app_bg_color;
         let header_text = self.theme.system.app_header_text_color;
-        let text_active = self.theme.system.text_active_color;
-        let hover_bg = self.theme.system.app_side_hover_bg_color;
-        let side_text = self.theme.system.app_side_text_color;
         let text_color = self.theme.system.text_color;
         let is_maximized = self.last_maximized;
 
@@ -725,69 +796,11 @@ impl QTermApp {
                     egui::vec2(total_btn_w, btn_h),
                 );
 
-                // 左侧：标题 + 标签页（限制最大宽度，不得侵入右侧按钮区）
+                // 左侧：标题（拖拽区域）
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_max_width(screen_right - total_btn_w - ui.min_rect().left());
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text));
-                    ui.add_space(16.0);
-
-                    // 卡片风格标签页
-                    let mut close_idx = None;
-                    let tab_h = title_bar_h - 6.0;
-                    for (idx, tab) in self.tabs.iter().enumerate() {
-                        let selected = idx == self.active_tab;
-                        let label = if tab.alive() { &tab.title } else { "[已关闭]" };
-
-                        let (text_color, bg_color) = if selected {
-                            (text_active, hover_bg)
-                        } else {
-                            (side_text, egui::Color32::TRANSPARENT)
-                        };
-
-                        let tab_frame = egui::Frame::none()
-                            .fill(bg_color)
-                            .rounding(egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 });
-
-                        let inner = tab_frame.show(ui, |ui| {
-                            ui.set_min_height(tab_h);
-                            ui.set_max_height(tab_h);
-                            ui.horizontal(|ui| {
-                                ui.add_space(5.0);
-                                ui.label(egui::RichText::new(label).color(text_color).size(13.0));
-                                ui.add_space(4.0);
-                                // 关闭标签按钮
-                                let close_btn = ui.add(egui::Button::new(
-                                    egui::RichText::new("x").size(11.0).color(text_color),
-                                ).frame(false).min_size(egui::vec2(30.0, 20.0)));
-                                if close_btn.clicked() {
-                                    close_idx = Some(idx);
-                                }
-                                close_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
-                                ui.add_space(4.0);
-                            });
-                        });
-
-                        // 点击标签页切换活动标签
-                        if inner.response.clicked() {
-                            self.active_tab = idx;
-                        }
-                        inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                        ui.add_space(1.0);
-                    }
-
-                    // "+" 新建标签按钮
-                    let add_btn = ui.add(egui::Button::new(
-                        egui::RichText::new("+").size(16.0).color(side_text),
-                    ).frame(false));
-                    if add_btn.clicked() {
-                        self.new_tab();
-                    }
-                    add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
-
-                    if let Some(idx) = close_idx {
-                        self.close_tab(idx);
-                    }
                 });
 
                 // 窗口控制按钮（右上角绝对定位）
