@@ -790,6 +790,7 @@ impl QTermApp {
 
                         // 点击标签页切换活动标签
                         if inner.response.clicked() {
+                            eprintln!("[DEBUG] tab {} clicked, switching from {}", idx, self.active_tab);
                             self.active_tab = idx;
                         }
                         inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
