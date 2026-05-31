@@ -788,12 +788,17 @@ impl QTermApp {
                             });
                         });
 
-                        // 点击标签页切换活动标签
-                        if inner.response.clicked() {
+                        // 点击标签页切换活动标签（Frame::show 仅支持 hover，需额外注册 click 感知）
+                        let tab_click_resp = ui.interact(
+                            inner.response.rect,
+                            egui::Id::new(format!("tab_{}", idx)),
+                            egui::Sense::click(),
+                        );
+                        if tab_click_resp.clicked() {
                             eprintln!("[DEBUG] tab {} clicked, switching from {}", idx, self.active_tab);
                             self.active_tab = idx;
                         }
-                        inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        tab_click_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         ui.add_space(1.0);
                     }
 
