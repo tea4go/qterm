@@ -795,7 +795,6 @@ impl QTermApp {
                             egui::Sense::click(),
                         );
                         if tab_click_resp.clicked() {
-                            eprintln!("[DEBUG] tab {} clicked, switching from {}", idx, self.active_tab);
                             self.active_tab = idx;
                         }
                         tab_click_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
