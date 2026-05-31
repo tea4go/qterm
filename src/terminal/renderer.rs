@@ -4,24 +4,30 @@ use super::Terminal;
 use super::cell::TermColor;
 use crate::theme::terminal::TerminalTheme;
 
+/// 终端尺寸信息
+/// 计算可用空间内能容纳的行数、列数及单元格大小
 pub struct TerminalSize {
-    pub rows: usize,
-    pub cols: usize,
-    pub cell_width: f32,
-    pub cell_height: f32,
+    pub rows: usize,           // 可容纳的终端行数
+    pub cols: usize,           // 可容纳的终端列数
+    pub cell_width: f32,       // 单个单元格宽度
+    pub cell_height: f32,      // 单个单元格高度
 }
 
+/// 终端渲染结果
+/// 返回鼠标响应对象和渲染参数（用于后续交互处理）
 pub struct RenderResult {
-    pub response: egui::Response,
-    pub cell_width: f32,
-    pub cell_height: f32,
-    pub origin: Pos2,
+    pub response: egui::Response,  // 鼠标交互响应
+    pub cell_width: f32,           // 单元格宽度
+    pub cell_height: f32,          // 单元格高度
+    pub origin: Pos2,             // 终端绘制起点坐标
 }
 
+/// 根据可用 UI 空间和字体大小计算终端能容纳的行列数
 pub fn calculate_size(ui: &Ui, font_size: f32) -> TerminalSize {
     let font_id = FontId::monospace(font_size);
+    // 使用 'M' 字符宽度作为等宽字体的单元格宽度基准
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
-    let cell_height = font_size * 1.4;
+    let cell_height = font_size * 1.4;  // 行高为字体大小的 1.4 倍
     let available = ui.available_size();
     let cols = (available.x / cell_width).floor() as usize;
     let rows = (available.y / cell_height).floor() as usize;
@@ -33,6 +39,8 @@ pub fn calculate_size(ui: &Ui, font_size: f32) -> TerminalSize {
     }
 }
 
+/// 渲染终端内容到 egui UI
+/// 绘制背景、字符、选区高亮和光标
 pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> RenderResult {
     let font_id = FontId::monospace(theme.font_size);
     let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
@@ -42,21 +50,22 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
     let render_width = available.x.max(terminal.cols() as f32 * cell_width);
     let render_height = available.y.max(terminal.rows() as f32 * cell_height);
 
+    // 分配绘制区域和交互感知
     let (response, painter) = ui.allocate_painter(
         Vec2::new(render_width, render_height),
         egui::Sense::click_and_drag(),
     );
     let origin = response.rect.min;
 
-    // Draw background
+    // 绘制背景填充
     painter.rect_filled(response.rect, 0.0, theme.background);
 
-    // Render cells
+    // 渲染每个单元格
     for row_idx in 0..terminal.rows() {
         let y = origin.y + row_idx as f32 * cell_height;
         let grid_row = terminal.grid.row(row_idx);
 
-        // Draw background colors for non-default cells
+        // 绘制非默认背景色单元格的背景
         for (col_idx, cell) in grid_row.iter().enumerate() {
             let bg = resolve_bg(cell.bg, cell.attrs.inverse, theme);
             if bg != theme.background {
@@ -68,12 +77,13 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
             }
         }
 
-        // Draw text in runs of same color
+        // 按颜色分段绘制文本（优化绘制性能）
         let mut col = 0;
         while col < grid_row.len() {
             let start_col = col;
             let fg = resolve_fg(grid_row[col].fg, grid_row[col].attrs.inverse, theme);
             let mut text = String::new();
+            // 连续相同前景色的单元格合并为一次绘制
             while col < grid_row.len() {
                 let cell_fg = resolve_fg(grid_row[col].fg, grid_row[col].attrs.inverse, theme);
                 if cell_fg != fg {
@@ -96,7 +106,7 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
         }
     }
 
-    // Draw selection highlight
+    // 绘制选区高亮
     if let Some((sr, sc, er, ec)) = terminal.normalized_selection() {
         for row in sr..=er.min(terminal.rows() - 1) {
             let col_start = if row == sr { sc } else { 0 };
@@ -108,8 +118,9 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
                 Pos2::new(x_start, y),
                 Vec2::new(x_end - x_start, cell_height),
             );
+            // 绘制选区背景色
             painter.rect_filled(rect, 0.0, theme.selection_bg);
-            // Re-draw text on top of selection with appropriate color
+            // 在选区背景上重新绘制文本（使用选区前景色）
             let grid_row = terminal.grid.row(row);
             let mut col = col_start;
             while col <= col_end {
@@ -135,7 +146,7 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
         }
     }
 
-    // Draw cursor
+    // 绘制光标
     if terminal.cursor.visible && terminal.cursor.row < terminal.rows() {
         let cx = origin.x + terminal.cursor.col as f32 * cell_width;
         let cy = origin.y + terminal.cursor.row as f32 * cell_height;
@@ -143,7 +154,9 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
             Pos2::new(cx, cy),
             Vec2::new(cell_width, cell_height),
         );
+        // 绘制光标背景色方块
         painter.rect_filled(cursor_rect, 0.0, theme.cursor);
+        // 在光标方块上绘制当前字符（使用光标强调色）
         if terminal.cursor.col < terminal.cols() {
             let ch = terminal.grid.row(terminal.cursor.row)[terminal.cursor.col].ch;
             if ch != ' ' {
@@ -166,6 +179,7 @@ pub fn render(ui: &mut Ui, terminal: &Terminal, theme: &TerminalTheme) -> Render
     }
 }
 
+/// 解析前景色：考虑反色模式时交换前景/背景
 fn resolve_fg(color: TermColor, inverse: bool, theme: &TerminalTheme) -> Color32 {
     if inverse {
         color.to_color32(false, theme)
@@ -174,6 +188,7 @@ fn resolve_fg(color: TermColor, inverse: bool, theme: &TerminalTheme) -> Color32
     }
 }
 
+/// 解析背景色：考虑反色模式时交换前景/背景
 fn resolve_bg(color: TermColor, inverse: bool, theme: &TerminalTheme) -> Color32 {
     if inverse {
         color.to_color32(true, theme)

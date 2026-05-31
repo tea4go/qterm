@@ -2,16 +2,18 @@ use eframe::egui;
 
 use super::parse_color;
 
+/// 终端主题
+/// 定义终端的颜色方案：前景/背景、光标、选区、ANSI 16色/256色映射
 pub struct TerminalTheme {
-    pub font_size: f32,
-    pub font_bold: bool,
-    pub background: egui::Color32,
-    pub foreground: egui::Color32,
-    pub cursor: egui::Color32,
-    pub cursor_accent: egui::Color32,
-    pub selection_bg: egui::Color32,
-    pub selection_fg: egui::Color32,
-    pub ansi_colors: [egui::Color32; 16],
+    pub font_size: f32,            // 终端字体大小
+    pub font_bold: bool,           // 是否粗体
+    pub background: egui::Color32, // 终端背景色
+    pub foreground: egui::Color32, // 终端前景色
+    pub cursor: egui::Color32,     // 光标颜色
+    pub cursor_accent: egui::Color32, // 光标上的文字颜色
+    pub selection_bg: egui::Color32,  // 选区背景色
+    pub selection_fg: egui::Color32,  // 选区前景色
+    pub ansi_colors: [egui::Color32; 16], // ANSI 标准 16 色映射
 }
 
 impl TerminalTheme {
@@ -79,6 +81,8 @@ impl TerminalTheme {
         }
     }
 
+    /// 根据 ANSI 颜色索引获取 Color32
+    /// 0-15: 标准16色，16-231: 6×6×6 216色立方体，232-255: 24灰度级
     pub fn color_from_index(&self, idx: u8) -> egui::Color32 {
         if idx < 16 {
             self.ansi_colors[idx as usize]

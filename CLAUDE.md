@@ -1,100 +1,100 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 提供本仓库代码工作时的指引。
 
-## Build & Run
+## 构建与运行
 
 ```bash
-cargo build                      # debug build
-cargo build --release            # release build (LTO + strip)
-cargo check                      # quick type-check
-cargo run                        # build + run debug
+cargo build                      # 调试构建
+cargo build --release            # 发布构建（LTO + strip）
+cargo check                      # 快速类型检查
+cargo run                        # 构建 + 运行调试版
 ```
 
-PowerShell wrapper (`build.ps1`):
+PowerShell 脚本（`build.ps1`）：
 ```powershell
-.\build.ps1                      # debug build + run
-.\build.ps1 -Release             # release build + run
-.\build.ps1 -BuildOnly           # build only, don't run
-.\build.ps1 -Clean               # cargo clean then build + run
+.\build.ps1                      # 调试构建 + 运行
+.\build.ps1 -Release             # 发布构建 + 运行
+.\build.ps1 -BuildOnly           # 仅构建，不运行
+.\build.ps1 -Clean               # 清理后重新构建 + 运行
 ```
 
-No test suite exists yet. Use `cargo check` for fast verification.
+暂无测试套件，使用 `cargo check` 进行快速验证。
 
-## Architecture
+## 架构
 
-QTerm is a GPU-accelerated terminal emulator built with Rust + egui/eframe. The UI has a custom title bar (no native decorations), a left sidebar with ribbon + connection list, and a central terminal area supporting split panes.
+QTerm 是一个 GPU 加速的终端模拟器，使用 Rust + egui/eframe 构建。UI 使用自定义标题栏（无原生窗口装饰），左侧边栏包含图标栏 + 连接列表，中央终端区域支持分屏。
 
-### Data flow
+### 数据流
 
 ```
 main.rs → QTermApp (app.rs)
-  ├── Tab (tab/tab_item.rs) — owns a SplitLayout
-  │     └── SplitLayout (ui/split_pane.rs) — manages ChildPanes (max 6)
+  ├── Tab (tab/tab_item.rs) — 拥有 SplitLayout
+  │     └── SplitLayout (ui/split_pane.rs) — 管理子面板（最多6个）
   │           └── ChildPane::PaneKind
   │                 ├── Terminal { terminal, backend: PtyHandle | SshHandle }
   │                 └── Sftp { panel }
-  ├── AppConfig (config.rs) — window state, saved to APPDATA/qterm/config.ini
-  ├── Preferences (config.rs) — fonts/theme from APPDATA/WhaleTerm/preferences.json
+  ├── AppConfig (config.rs) — 窗口状态，保存到 APPDATA/qterm/config.ini
+  ├── Preferences (config.rs) — 字体/主题，来自 APPDATA/WhaleTerm/preferences.json
   └── AppTheme (theme/) — SystemTheme + TerminalTheme + ExtraTheme
 ```
 
-### Terminal pipeline
+### 终端数据管线
 
-1. **PTY/SSH** → raw bytes via channel (`reader_rx`)
-2. **Terminal::feed()** → `vte::Parser` → updates `Grid` (cells with char + colors + attrs)
-3. **renderer::render()** → reads `Grid`, draws with egui `Painter` using `TerminalTheme` colors
-4. **User input** → keyboard/mouse events → writes bytes back to PTY/SSH
+1. **PTY/SSH** → 通过通道（`reader_rx`）传输原始字节
+2. **Terminal::feed()** → `vte::Parser` → 更新 `Grid`（含字符+颜色+属性的单元格）
+3. **renderer::render()** → 读取 `Grid`，使用 `TerminalTheme` 颜色通过 egui `Painter` 绘制
+4. **用户输入** → 键盘/鼠标事件 → 将字节写回 PTY/SSH
 
-### Key modules
+### 关键模块
 
-- **`terminal/`** — Grid (scrollback buffer), Cell (char + ANSI attrs), Parser (vte escape sequences), Renderer (egui painting)
-- **`theme/`** — `SystemTheme` (UI colors, applies to egui Style), `TerminalTheme` (ANSI 16/256 colors, cursor), `ExtraTheme` (SFTP progress, tables). All colors are hardcoded hex with `parse_color()`.
-- **`ssh/`** — `SshHandle` wraps russh with tokio runtime, `SshClient` is the russh Handler
-- **`sftp/`** — `SftpHandle` wraps russh-sftp, opened from an existing SSH connection
-- **`pty/`** — `PtyHandle` wraps portable-pty for local shell sessions
-- **`connection/`** — Reads WhaleTerm's `connections.json`, decrypts AES-256-CFB passwords (key derived from motherboard serial)
+- **`terminal/`** — Grid（回滚缓冲区），Cell（字符+ANSI属性），Parser（VTE转义序列），Renderer（egui绘制）
+- **`theme/`** — `SystemTheme`（UI颜色，应用到 egui Style），`TerminalTheme`（ANSI 16/256色，光标），`ExtraTheme`（SFTP进度条，表格）。所有颜色为硬编码十六进制值，通过 `parse_color()` 解析。
+- **`ssh/`** — `SshHandle` 封装 russh 配合 tokio 运行时，`SshClient` 为 russh Handler
+- **`sftp/`** — `SftpHandle` 封装 russh-sftp，从现有 SSH 连接打开
+- **`pty/`** — `PtyHandle` 封装 portable-pty 用于本地 Shell 会话
+- **`connection/`** — 读取 WhaleTerm 的 `connections.json`，解密 AES-256-CFB 密码（密钥由主板序列号派生）
 
-### Configuration sources
+### 配置来源
 
-| File | Location | Purpose |
-|------|----------|---------|
-| `config.ini` | `APPDATA/qterm/` | Window position/size, font zoom level |
-| `preferences.json` | `APPDATA/WhaleTerm/` | Font families/sizes/bold per section, theme |
-| `connections.json` | `APPDATA/WhaleTerm/` | SSH connections with encrypted passwords |
+| 文件 | 位置 | 用途 |
+|------|------|------|
+| `config.ini` | `APPDATA/qterm/` | 窗口位置/大小，字体缩放级别 |
+| `preferences.json` | `APPDATA/WhaleTerm/` | 各区域字体族/大小/粗体，主题 |
+| `connections.json` | `APPDATA/WhaleTerm/` | SSH 连接配置及加密密码 |
 
-Font config mapping from `preferences.json`:
-- `config.defaultFontFamily/Size/Bold` → main body default font
-- `general.fontFamily/Size/Bold` → left sidebar/outline font
-- `shell.fontFamily/Size/Bold` → terminal and SFTP font
+字体配置映射（来自 `preferences.json`）：
+- `config.defaultFontFamily/Size/Bold` → 主体默认字体
+- `general.fontFamily/Size/Bold` → 左侧边栏/大纲字体
+- `shell.fontFamily/Size/Bold` → 终端和 SFTP 字体
 
-### UI layout (rendered in `app.rs` update loop)
+### UI 布局（在 `app.rs` update 循环中渲染）
 
 ```
-┌─ Title Bar (40px, custom drag area + window controls) ────────┐
-│ [QTerm] [Tab1] [Tab2] [+]                        [-][□][x]   │
-├────┬─────────────┬────────────────────────────────────────────┤
-│ >_ │ Connections │ Terminal / SFTP panes                      │
-│  F │  Group 1    │                                            │
-│    │   host1     │  (split up to 6 panes, H or V)            │
-│    │   host2     │                                            │
-│    │ Open Tabs   │                                            │
-│    │  tab1       │                                            │
-│    │             │                                            │
-│ [L]│             │                                            │
-├────┴─────────────┴────────────────────────────────────────────┤
-│ ● session | connected    Ctrl+T New | Ctrl+Shift+N SSH ...   │
-└───────────────────────────────────────────────────────────────┘
+┌─ 标题栏 (40px，自定义拖拽区 + 窗口控制按钮) ─────────────┐
+│ [QTerm] [标签1] [标签2] [+]                    [-][□][x]  │
+├────┬─────────────┬───────────────────────────────────────┤
+│ >_ │ 连接        │ 终端 / SFTP 面板                       │
+│  F │  分组 1     │                                       │
+│    │   host1     │  （最多6个分屏面板，水平或垂直）        │
+│    │   host2     │                                       │
+│    │ 打开的标签  │                                       │
+│    │  tab1       │                                       │
+│    │             │                                       │
+│ [L]│             │                                       │
+├────┴─────────────┴───────────────────────────────────────┤
+│ ● 会话 | 已连接    Ctrl+T 新建 | Ctrl+Shift+N SSH ...    │
+└──────────────────────────────────────────────────────────┘
 ```
 
-### Keyboard shortcuts
+### 快捷键
 
-- `Ctrl+T` / `Ctrl+W` — new/close tab
-- `Ctrl+Shift+H/V` — split pane horizontal/vertical
-- `Ctrl+Shift+W` — close active pane
-- `Ctrl+Arrow` — cycle panes
-- `Ctrl+B` — toggle left sidebar
-- `Ctrl+Shift+N` — SSH dialog
-- `Ctrl+Shift+F` — open SFTP from active SSH pane
-- `Ctrl+/-` — font zoom in/out
-- `L/D` button in ribbon — toggle light/dark theme
+- `Ctrl+T` / `Ctrl+W` — 新建/关闭标签页
+- `Ctrl+Shift+H/V` — 水平/垂直分屏
+- `Ctrl+Shift+W` — 关闭活动面板
+- `Ctrl+方向键` — 切换面板
+- `Ctrl+B` — 切换左侧边栏
+- `Ctrl+Shift+N` — SSH 连接对话框
+- `Ctrl+Shift+F` — 从活动 SSH 面板打开 SFTP
+- `Ctrl+/-` — 字体缩放
+- 左侧图标栏 `L/D` 按钮 — 切换浅色/深色主题

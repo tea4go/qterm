@@ -2,26 +2,31 @@ use eframe::egui;
 
 use crate::sftp::{self, SftpEvent, FileEntry};
 
+/// 本地文件条目（与远程 FileEntry 对应的本地版本）
 struct LocalFileEntry {
-    name: String,
-    is_dir: bool,
-    size: u64,
+    name: String,      // 文件名
+    is_dir: bool,      // 是否为目录
+    size: u64,         // 文件大小
 }
 
+/// SFTP 面板 UI 组件
+/// 显示本地和远程文件的双栏浏览器，支持上传/下载操作
 pub struct SftpPanel {
-    sftp: sftp::SftpHandle,
-    local_path: String,
-    remote_path: String,
-    local_entries: Vec<LocalFileEntry>,
-    remote_entries: Vec<FileEntry>,
-    selected_local: Option<usize>,
-    selected_remote: Option<usize>,
-    status: String,
-    connected: bool,
-    pending_list: bool,
+    sftp: sftp::SftpHandle,           // SFTP 客户端句柄
+    local_path: String,               // 当前本地路径
+    remote_path: String,              // 当前远程路径
+    local_entries: Vec<LocalFileEntry>, // 本地文件列表
+    remote_entries: Vec<FileEntry>,    // 远程文件列表
+    selected_local: Option<usize>,     // 本地选中项索引
+    selected_remote: Option<usize>,    // 远程选中项索引
+    status: String,                   // 状态信息
+    connected: bool,                  // 是否已连接
+    pending_list: bool,               // 是否等待目录列表结果
 }
 
 impl SftpPanel {
+    /// 创建 SFTP 面板实例
+    /// 初始化本地路径为用户主目录，远程路径为根目录
     pub fn new(sftp: sftp::SftpHandle) -> Self {
         let local_path = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
@@ -35,7 +40,7 @@ impl SftpPanel {
             remote_entries: Vec::new(),
             selected_local: None,
             selected_remote: None,
-            status: "Connecting...".to_string(),
+            status: "正在连接...".to_string(),
             connected: false,
             pending_list: false,
         };
@@ -43,12 +48,13 @@ impl SftpPanel {
         panel
     }
 
+    /// 轮询 SFTP 事件并更新面板状态
     pub fn poll(&mut self) {
         for event in self.sftp.poll() {
             match event {
                 SftpEvent::Connected => {
                     self.connected = true;
-                    self.status = "Connected".to_string();
+                    self.status = "已连接".to_string();
                     self.pending_list = true;
                     self.sftp.list_dir(&self.remote_path);
                 }
@@ -60,37 +66,37 @@ impl SftpPanel {
                 SftpEvent::UploadDone(result) => {
                     match result {
                         Ok(()) => {
-                            self.status = "Upload complete".to_string();
+                            self.status = "上传完成".to_string();
                             self.sftp.list_dir(&self.remote_path);
                         }
-                        Err(e) => self.status = format!("Upload failed: {}", e),
+                        Err(e) => self.status = format!("上传失败: {}", e),
                     }
                 }
                 SftpEvent::DownloadDone(result) => {
                     match result {
                         Ok(()) => {
-                            self.status = "Download complete".to_string();
+                            self.status = "下载完成".to_string();
                             self.refresh_local();
                         }
-                        Err(e) => self.status = format!("Download failed: {}", e),
+                        Err(e) => self.status = format!("下载失败: {}", e),
                     }
                 }
                 SftpEvent::MkdirDone(result) => {
                     match result {
                         Ok(()) => {
-                            self.status = "Directory created".to_string();
+                            self.status = "目录已创建".to_string();
                             self.sftp.list_dir(&self.remote_path);
                         }
-                        Err(e) => self.status = format!("Mkdir failed: {}", e),
+                        Err(e) => self.status = format!("创建目录失败: {}", e),
                     }
                 }
                 SftpEvent::DeleteDone(result) => {
                     match result {
                         Ok(()) => {
-                            self.status = "Deleted".to_string();
+                            self.status = "已删除".to_string();
                             self.sftp.list_dir(&self.remote_path);
                         }
-                        Err(e) => self.status = format!("Delete failed: {}", e),
+                        Err(e) => self.status = format!("删除失败: {}", e),
                     }
                 }
                 SftpEvent::Error(e) => {
@@ -103,6 +109,8 @@ impl SftpPanel {
         }
     }
 
+    /// 显示 SFTP 面板 UI
+    /// 左右双栏布局：本地文件浏览器 + 远程文件浏览器
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             let available = ui.available_size();
@@ -110,6 +118,7 @@ impl SftpPanel {
             let btn_h = 28.0;
             let list_h = (available.y - btn_h).max(100.0);
 
+            // 左右双栏布局
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_max_width(half_w);
@@ -124,15 +133,16 @@ impl SftpPanel {
                 });
             });
 
+            // 底部操作栏
             ui.separator();
             ui.horizontal(|ui| {
                 let can_upload = self.selected_local.is_some();
                 let can_download = self.selected_remote.is_some();
 
-                if ui.add_enabled(can_upload, egui::Button::new("Upload ->")).clicked() {
+                if ui.add_enabled(can_upload, egui::Button::new("上传 ->")).clicked() {
                     self.do_upload();
                 }
-                if ui.add_enabled(can_download, egui::Button::new("<- Download")).clicked() {
+                if ui.add_enabled(can_download, egui::Button::new("<- 下载")).clicked() {
                     self.do_download();
                 }
                 ui.separator();
@@ -141,17 +151,21 @@ impl SftpPanel {
         });
     }
 
+    /// 检查 SFTP 连接是否存活
     pub fn is_alive(&self) -> bool {
         self.sftp.is_alive()
     }
 
+    /// 关闭 SFTP 连接
     pub fn close(&mut self) {
         self.sftp.disconnect();
     }
 
+    /// 显示本地文件浏览器面板
     fn show_local_pane(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("Local:");
+            ui.label("本地：");
+            // 上级目录按钮
             if ui.button("..").clicked() {
                 self.navigate_local_up();
             }
@@ -173,6 +187,7 @@ impl SftpPanel {
                     if resp.clicked() {
                         self.selected_local = Some(i);
                     }
+                    // 双击目录项进入子目录
                     if resp.double_clicked() && entry.is_dir {
                         navigate_idx = Some(i);
                     }
@@ -186,9 +201,11 @@ impl SftpPanel {
         }
     }
 
+    /// 显示远程文件浏览器面板
     fn show_remote_pane(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("Remote:");
+            ui.label("远程：");
+            // 上级目录按钮
             if ui.button("..").clicked() {
                 self.navigate_remote_up();
             }
@@ -202,7 +219,7 @@ impl SftpPanel {
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 if !self.connected {
-                    ui.label("Connecting...");
+                    ui.label("正在连接...");
                     return;
                 }
                 for (i, entry) in self.remote_entries.iter().enumerate() {
@@ -214,6 +231,7 @@ impl SftpPanel {
                     if resp.clicked() {
                         self.selected_remote = Some(i);
                     }
+                    // 双击目录项进入子目录
                     if resp.double_clicked() && entry.is_dir {
                         navigate_idx = Some(i);
                     }
@@ -227,11 +245,13 @@ impl SftpPanel {
         }
     }
 
+    /// 刷新本地文件列表
     fn refresh_local(&mut self) {
         let mut entries: Vec<LocalFileEntry> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&self.local_path) {
             for entry in rd.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
+                // 过滤隐藏文件（以.开头）
                 if name.starts_with('.') {
                     continue;
                 }
@@ -244,6 +264,7 @@ impl SftpPanel {
                 }
             }
         }
+        // 排序：目录优先，然后按名称排序
         entries.sort_by(|a, b| {
             b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
@@ -251,6 +272,7 @@ impl SftpPanel {
         self.selected_local = None;
     }
 
+    /// 进入本地子目录
     fn navigate_local_into(&mut self, name: &str) {
         let mut new_path = self.local_path.clone();
         if !new_path.ends_with('\\') && !new_path.ends_with('/') {
@@ -263,6 +285,7 @@ impl SftpPanel {
         }
     }
 
+    /// 返回本地上级目录
     fn navigate_local_up(&mut self) {
         if let Some(parent) = std::path::Path::new(&self.local_path).parent() {
             let p = parent.to_string_lossy().to_string();
@@ -273,6 +296,7 @@ impl SftpPanel {
         }
     }
 
+    /// 进入远程子目录
     fn navigate_remote_into(&mut self, name: &str) {
         let mut new_path = self.remote_path.clone();
         if !new_path.ends_with('/') {
@@ -285,6 +309,7 @@ impl SftpPanel {
         self.pending_list = true;
     }
 
+    /// 返回远程上级目录
     fn navigate_remote_up(&mut self) {
         let path = std::path::Path::new(&self.remote_path);
         if let Some(parent) = path.parent() {
@@ -298,37 +323,40 @@ impl SftpPanel {
         }
     }
 
+    /// 执行上传操作（本地 → 远程）
     fn do_upload(&mut self) {
         if let Some(idx) = self.selected_local {
             if let Some(entry) = self.local_entries.get(idx) {
                 if entry.is_dir {
-                    self.status = "Cannot upload directories".to_string();
+                    self.status = "无法上传目录".to_string();
                     return;
                 }
                 let local = format_local_path(&self.local_path, &entry.name);
                 let remote = format_remote_path(&self.remote_path, &entry.name);
-                self.status = format!("Uploading {}...", entry.name);
+                self.status = format!("正在上传 {}...", entry.name);
                 self.sftp.upload(local, remote);
             }
         }
     }
 
+    /// 执行下载操作（远程 → 本地）
     fn do_download(&mut self) {
         if let Some(idx) = self.selected_remote {
             if let Some(entry) = self.remote_entries.get(idx) {
                 if entry.is_dir {
-                    self.status = "Cannot download directories".to_string();
+                    self.status = "无法下载目录".to_string();
                     return;
                 }
                 let remote = format_remote_path(&self.remote_path, &entry.name);
                 let local = format_local_path(&self.local_path, &entry.name);
-                self.status = format!("Downloading {}...", entry.name);
+                self.status = format!("正在下载 {}...", entry.name);
                 self.sftp.download(remote, local);
             }
         }
     }
 }
 
+/// 格式化文件大小为人类可读格式（B/K/M/G）
 fn format_size(size: u64) -> String {
     if size == 0 {
         return String::new();
@@ -347,11 +375,13 @@ fn format_size(size: u64) -> String {
     }
 }
 
+/// 格式化本地文件路径（使用平台对应的分隔符）
 fn format_local_path(dir: &str, name: &str) -> String {
     let sep = if dir.contains('\\') { '\\' } else { '/' };
     format!("{}{}{}", dir.trim_end_matches(sep), sep, name)
 }
 
+/// 格式化远程文件路径（始终使用 / 作为分隔符）
 fn format_remote_path(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
 }

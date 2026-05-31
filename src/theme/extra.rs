@@ -2,25 +2,26 @@ use eframe::egui;
 
 use super::parse_color;
 
+/// 扩展主题（SFTP进度条、标签页、表格等非核心UI组件颜色）
 pub struct ExtraTheme {
-    // Tab
-    pub tab_icon_color: egui::Color32,
-    pub tab_active_text_color: egui::Color32,
-    pub active_color: egui::Color32,
+    // 标签页
+    pub tab_icon_color: egui::Color32,          // 标签图标颜色
+    pub tab_active_text_color: egui::Color32,   // 活动标签文字颜色
+    pub active_color: egui::Color32,            // 活动状态颜色
 
-    // Terminal
-    pub term_connected_color: egui::Color32,
+    // 终端连接状态
+    pub term_connected_color: egui::Color32,    // 终端已连接指示灯颜色
 
-    // SFTP progress
-    pub ftp_progress_color: egui::Color32,
-    pub ftp_progress_rail_color: egui::Color32,
-    pub ftp_progress_text_color: egui::Color32,
-    pub ftp_progress_border_color: egui::Color32,
+    // SFTP 进度条
+    pub ftp_progress_color: egui::Color32,           // 进度条填充色
+    pub ftp_progress_rail_color: egui::Color32,      // 进度条轨道色
+    pub ftp_progress_text_color: egui::Color32,      // 进度条文字色
+    pub ftp_progress_border_color: egui::Color32,    // 进度条边框色
 
-    // Table
-    pub table_th_bg: egui::Color32,
-    pub table_td_bg: egui::Color32,
-    pub table_hover_color: egui::Color32,
+    // 表格
+    pub table_th_bg: egui::Color32,      // 表头背景色
+    pub table_td_bg: egui::Color32,      // 单元格背景色
+    pub table_hover_color: egui::Color32, // 悬停行背景色
 }
 
 impl ExtraTheme {

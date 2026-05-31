@@ -1,11 +1,14 @@
 use super::cell::{CellAttrs, TermColor};
 use super::Terminal;
 
+/// VTE 解析器的执行器
+/// 将解析后的 ANSI 序列应用到终端状态（光标移动、颜色设置等）
 pub struct Performer<'a> {
     pub terminal: &'a mut Terminal,
 }
 
 impl<'a> vte::Perform for Performer<'a> {
+    /// 处理可打印字符：在光标位置写入字符，光标右移
     fn print(&mut self, c: char) {
         let t = &mut *self.terminal;
 
@@ -28,6 +31,7 @@ impl<'a> vte::Perform for Performer<'a> {
         t.cursor.col += 1;
     }
 
+    /// 处理控制字符执行（退格、制表、换行、回车等）
     fn execute(&mut self, byte: u8) {
         let t = &mut *self.terminal;
         match byte {
@@ -56,6 +60,8 @@ impl<'a> vte::Perform for Performer<'a> {
         }
     }
 
+    /// 处理 CSI（控制序列引入器）序列
+    /// 支持光标移动、清屏、滚动、颜色设置等 ANSI 操作
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
@@ -166,6 +172,8 @@ impl<'a> vte::Perform for Performer<'a> {
         }
     }
 
+    /// 处理 OSC（操作系统命令）序列
+    /// 主要用于设置终端标题（OSC 0/1/2）
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         if params.is_empty() {
             return;
@@ -184,6 +192,8 @@ impl<'a> vte::Perform for Performer<'a> {
         }
     }
 
+    /// 处理 ESC（转义）序列
+    /// 支持保存/恢复光标、索引/反向索引、全复位等
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
         let t = &mut *self.terminal;
         match byte {
@@ -223,6 +233,8 @@ impl<'a> vte::Perform for Performer<'a> {
 }
 
 impl<'a> Performer<'a> {
+    /// 处理 SGR（选择图形再现）序列
+    /// 设置字符属性（粗体、斜体等）和颜色（前景/背景）
     fn handle_sgr(&mut self, params: &[u16]) {
         let t = &mut *self.terminal;
         if params.is_empty() {
