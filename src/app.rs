@@ -72,6 +72,7 @@ impl QTermApp {
         let font_size = preferences.shell_font_size;
         theme.system.apply_to_egui(&cc.egui_ctx, is_dark, preferences.general_font_size);
         let left_pane_width = config.left_pane_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
+        eprintln!("[DEBUG] init left_pane_width from config: {}", left_pane_width);
         let mut app = Self {
             tabs: Vec::new(),
             active_tab: 0,
@@ -484,8 +485,12 @@ impl eframe::App for QTermApp {
                 .show_separator_line(true)
                 .show(ctx, |ui| {
                     // 追踪用户拖动分隔条后的面板宽度变化
-                    let new_width = ui.min_rect().width();
-                    self.left_pane_width = new_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
+                    let new_width = ui.max_rect().width();
+                    let clamped = new_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
+                    if self.frame_count <= 5 || (clamped - self.left_pane_width).abs() > 0.5 {
+                        eprintln!("[DEBUG] frame={} max_rect_w={:.1} clamped={:.1} stored={:.1}", self.frame_count, new_width, clamped, self.left_pane_width);
+                    }
+                    self.left_pane_width = clamped;
                     // 强制限制宽度并裁剪超出内容，防止面板撑大
                     let clip = ui.max_rect();
                     ui.set_clip_rect(clip);
@@ -661,6 +666,7 @@ impl eframe::App for QTermApp {
 
     /// 应用退出时保存配置并关闭所有标签页
     fn on_exit(&mut self) {
+        eprintln!("[DEBUG] on_exit called, left_pane_width={}", self.left_pane_width);
         self.config.window_x = self.last_window_pos.map(|(x, _)| x);
         self.config.window_y = self.last_window_pos.map(|(_, y)| y);
         self.config.window_width = self.last_window_size.map(|(w, _)| w);
