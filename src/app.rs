@@ -890,8 +890,6 @@ impl QTermApp {
         egui::ScrollArea::vertical()
             .auto_shrink([true, true])
             .show(ui, |ui| {
-            ui.add_space(8.0);
-
             if !self.connections.is_empty() {
                 let mut current_group = "";
                 for (idx, conn) in self.connections.iter().enumerate() {
