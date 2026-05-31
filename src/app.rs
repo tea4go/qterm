@@ -10,7 +10,6 @@ use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
 
 // UI 常量尺寸
 const TITLE_BAR_HEIGHT: f32 = 40.0;  // 标题栏高度
-const RIBBON_WIDTH: f32 = 50.0;       // 左侧图标栏宽度
 const LEFT_PANE_WIDTH: f32 = 220.0;   // 左侧面板宽度
 
 /// QTerm 应用主结构体
@@ -29,18 +28,9 @@ pub struct QTermApp {
     ssh_dialog: crate::ui::ssh_dialog::SshDialog,  // SSH 连接对话框
     sftp_error: Option<String>,           // SFTP 错误信息
     show_left_pane: bool,                 // 是否显示左侧面板
-    ribbon_active: RibbonSection,         // 当前活动功能区
     context_menu: ContextMenu,            // 右键上下文菜单
     pending_mouse: Option<PendingMouse>,  // 待处理的鼠标事件
     connections: Vec<Connection>,          // WhaleTerm 连接列表
-}
-
-/// 左侧功能区类型
-#[derive(Clone, Copy, PartialEq)]
-enum RibbonSection {
-    Terminal,   // 终端区
-    Sftp,       // SFTP 区
-    Settings,   // 设置区
 }
 
 /// 右键上下文菜单状态
@@ -90,7 +80,6 @@ impl QTermApp {
             ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
             sftp_error: None,
             show_left_pane: true,
-            ribbon_active: RibbonSection::Terminal,
             context_menu: ContextMenu::default(),
             pending_mouse: None,
             connections: crate::connection::load_connections(),
@@ -395,23 +384,15 @@ impl eframe::App for QTermApp {
         // === 标题栏渲染（40px） ===
         self.render_title_bar(ctx);
 
-        // === 左侧面板：图标栏 + 连接列表 ===
-        let left_total = if self.show_left_pane {
-            RIBBON_WIDTH + LEFT_PANE_WIDTH
-        } else {
-            RIBBON_WIDTH
-        };
-        egui::SidePanel::left("left_panel")
-            .frame(egui::Frame::none())
-            .exact_width(left_total)
-            .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
-                    self.render_ribbon(ui);
-                    if self.show_left_pane {
-                        self.render_left_pane(ui);
-                    }
+        // === 左侧面板：连接列表 ===
+        if self.show_left_pane {
+            egui::SidePanel::left("left_panel")
+                .frame(egui::Frame::none())
+                .exact_width(LEFT_PANE_WIDTH)
+                .show(ctx, |ui| {
+                    self.render_left_pane(ui);
                 });
-            });
+        }
 
         // === 底部状态栏 ===
         self.render_foot_bar(ctx);
@@ -724,79 +705,13 @@ impl QTermApp {
     }
 }
 
-// ==================== 左侧图标栏（Ribbon） ====================
-
-impl QTermApp {
-    /// 渲染左侧图标栏
-    /// 包含：终端图标、SFTP图标、底部主题切换按钮
-    fn render_ribbon(&mut self, ui: &mut egui::Ui) {
-        let icon_size = RIBBON_WIDTH - 10.0;
-        let sider_bar_bg = self.theme.system.app_sider_bar_bg_color;
-        let split_color = self.theme.system.app_split_color;
-        let side_text_color = self.theme.system.app_side_text_color;
-        let hover_bg = self.theme.system.app_side_hover_bg_color;
-        let text_active = self.theme.system.app_side_text_active_color;
-        let is_dark = self.theme.is_dark();
-
-        egui::Frame::none()
-            .fill(sider_bar_bg)
-            .stroke(egui::Stroke::new(1.0, split_color))
-            .show(ui, |ui| {
-                ui.set_min_width(RIBBON_WIDTH);
-                ui.set_max_width(RIBBON_WIDTH);
-                ui.vertical(|ui| {
-                    ui.add_space(5.0);
-
-                    // 终端图标按钮
-                    let terminal_active = self.ribbon_active == RibbonSection::Terminal;
-                    let bg = if terminal_active { hover_bg } else { egui::Color32::TRANSPARENT };
-                    let fg = if terminal_active { text_active } else { side_text_color };
-                    if ui.add(
-                        egui::Button::new(egui::RichText::new(">_").size(RIBBON_WIDTH * 0.4).color(fg).strong())
-                            .frame(false).min_size(egui::vec2(icon_size, icon_size))
-                            .rounding(egui::Rounding::same(8.0)).fill(bg),
-                    ).clicked() {
-                        self.ribbon_active = RibbonSection::Terminal;
-                    }
-
-                    // SFTP 图标按钮
-                    let sftp_active = self.ribbon_active == RibbonSection::Sftp;
-                    let bg = if sftp_active { hover_bg } else { egui::Color32::TRANSPARENT };
-                    let fg = if sftp_active { text_active } else { side_text_color };
-                    if ui.add(
-                        egui::Button::new(egui::RichText::new("F").size(RIBBON_WIDTH * 0.4).color(fg).strong())
-                            .frame(false).min_size(egui::vec2(icon_size, icon_size))
-                            .rounding(egui::Rounding::same(8.0)).fill(bg),
-                    ).clicked() {
-                        self.ribbon_active = RibbonSection::Sftp;
-                    }
-
-                    // 底部：主题切换按钮（浅色/深色切换）
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        let theme_icon = if is_dark { "L" } else { "D" };
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new(theme_icon).size(14.0).color(side_text_color),
-                        ).frame(false).min_size(egui::vec2(30.0, 30.0))
-                         .rounding(egui::Rounding::same(4.0))).clicked() {
-                            self.theme.toggle_mode();
-                            self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
-                        }
-                        ui.add_space(2.0);
-                    });
-                });
-            });
-    }
-}
-
 // ==================== 左侧面板 ====================
 
 impl QTermApp {
     /// 渲染左侧面板内容
-    /// 根据当前功能区显示：终端连接列表、SFTP提示、设置面板
     fn render_left_pane(&mut self, ui: &mut egui::Ui) {
         let left_list_bg = self.theme.system.app_left_list_bg_color;
         let text_color = self.theme.system.text_color;
-
         let split_color = self.theme.system.app_split_color;
 
         egui::Frame::none()
@@ -808,33 +723,29 @@ impl QTermApp {
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        // 显示当前功能区的标题
-                        let title = match self.ribbon_active {
-                            RibbonSection::Terminal => "终端",
-                            RibbonSection::Sftp => "SFTP",
-                            RibbonSection::Settings => "设置",
-                        };
-                        ui.label(egui::RichText::new(title).strong().color(text_color).size(14.0));
+                        ui.label(egui::RichText::new("终端").strong().color(text_color).size(14.0));
                     });
                     ui.add_space(4.0);
                     ui.separator();
 
-                    // 根据功能区切换面板内容
-                    match self.ribbon_active {
-                        RibbonSection::Terminal => self.render_terminal_pane(ui),
-                        RibbonSection::Sftp => self.render_sftp_section(ui),
-                        RibbonSection::Settings => self.render_settings_section(ui),
-                    }
+                    self.render_terminal_pane(ui);
 
-                    // 底部工具栏：新建SSH和本地终端按钮
+                    // 底部工具栏
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.button("+ 新建 SSH").clicked() {
+                            if ui.button("+ SSH").clicked() {
                                 self.ssh_dialog.open = true;
                             }
-                            if ui.button("本地终端").clicked() {
+                            if ui.button("+ 本地").clicked() {
                                 self.new_tab();
+                            }
+                            // 主题切换按钮
+                            let is_dark = self.theme.is_dark();
+                            let theme_label = if is_dark { "浅色" } else { "深色" };
+                            if ui.button(theme_label).clicked() {
+                                self.theme.toggle_mode();
+                                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
                             }
                         });
                         ui.add_space(2.0);
@@ -954,33 +865,6 @@ impl QTermApp {
                 self.close_tab(self.active_tab);
             }
         }
-    }
-
-    /// 渲染 SFTP 提示面板
-    fn render_sftp_section(&mut self, ui: &mut egui::Ui) {
-        let side_text = self.theme.system.app_side_text_color;
-        ui.vertical(|ui| {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("SFTP 需要 SSH 连接。").size(12.0).color(side_text));
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("在 SSH 标签中使用 Ctrl+Shift+F 打开 SFTP。").size(11.0).color(side_text));
-        });
-    }
-
-    /// 渲染设置面板（主题切换）
-    fn render_settings_section(&mut self, ui: &mut egui::Ui) {
-        let side_text = self.theme.system.app_side_text_color;
-        let is_dark = self.theme.is_dark();
-        ui.vertical(|ui| {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("主题").size(12.0).color(side_text));
-            ui.add_space(4.0);
-            let label = if is_dark { "切换到浅色" } else { "切换到深色" };
-            if ui.button(label).clicked() {
-                self.theme.toggle_mode();
-                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
-            }
-        });
     }
 }
 

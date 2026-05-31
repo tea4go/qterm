@@ -10,7 +10,8 @@ pub struct ConnectionsFile {
 #[derive(Deserialize)]
 pub struct WhaleGroup {
     #[serde(rename = "groupName")]
-    pub group_name: String,           // 分组名称
+    pub group_name: String,                // 分组名称
+    #[serde(default)]
     pub connections: Vec<WhaleConnection>, // 分组中的连接列表
 }
 
@@ -19,8 +20,11 @@ pub struct WhaleGroup {
 pub struct WhaleConnection {
     pub name: String,                 // 连接显示名称
     pub addr: String,                 // 主机地址
+    #[serde(default)]
     pub port: u16,                    // SSH 端口
+    #[serde(default)]
     pub username: String,             // 用户名
+    #[serde(default)]
     pub password: String,             // 加密密码（AES-256-CFB）
     #[serde(rename = "authModel", default)]
     pub auth_model: String,           // 认证模型（password/key）
