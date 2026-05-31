@@ -32,6 +32,8 @@ pub struct QTermApp {
     pending_mouse: Option<PendingMouse>,  // 待处理的鼠标事件
     connections: Vec<Connection>,          // WhaleTerm 连接列表
     connections_rx: Option<std::sync::mpsc::Receiver<Vec<Connection>>>,
+    selected_connection: Option<usize>,    // 当前选中的连接索引
+    collapsed_groups: std::collections::HashSet<String>, // 收缩的分组名集合
 }
 
 /// 右键上下文菜单状态
@@ -82,6 +84,8 @@ impl QTermApp {
             context_menu: ContextMenu::default(),
             pending_mouse: None,
             connections: Vec::new(),
+            selected_connection: None,
+            collapsed_groups: std::collections::HashSet::new(),
             connections_rx: {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
@@ -129,7 +133,6 @@ impl QTermApp {
                         path.clone(),
                         egui::FontData::from_owned(data).into(),
                     );
-                    // 同时注册到比例字体和等宽字体族
                     fonts.families.entry(egui::FontFamily::Proportional).or_default().push(path.clone());
                     fonts.families.entry(egui::FontFamily::Monospace).or_default().push(path.clone());
                     break;
@@ -147,11 +150,11 @@ impl QTermApp {
         };
 
         // 加载回退字体（避免重复加载）
-        for path in fallback_paths {
-            if fonts.font_data.contains_key(path) {
+        for path in &fallback_paths {
+            if fonts.font_data.contains_key(*path) {
                 continue;
             }
-            if let Ok(data) = std::fs::read(path) {
+            if let Ok(data) = std::fs::read(*path) {
                 fonts.font_data.insert(
                     path.to_string(),
                     egui::FontData::from_owned(data).into(),
@@ -160,6 +163,40 @@ impl QTermApp {
                 fonts.families.entry(egui::FontFamily::Monospace).or_default().push(path.to_string());
             }
         }
+
+        // 注册命名字体族 "general"，用于左侧面板
+        // 粗体时优先使用粗体字体变体
+        let general_family = egui::FontFamily::Name(std::sync::Arc::from("general"));
+        let mut general_fonts_list: Vec<String> = Vec::new();
+        if prefs.general_font_bold {
+            let bold_path = if cfg!(target_os = "windows") {
+                "C:\\Windows\\Fonts\\msyhbd.ttc"
+            } else if cfg!(target_os = "macos") {
+                "/System/Library/Fonts/PingFang.ttc"
+            } else {
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"
+            };
+            if !fonts.font_data.contains_key(bold_path) {
+                if let Ok(data) = std::fs::read(bold_path) {
+                    fonts.font_data.insert(
+                        bold_path.to_string(),
+                        egui::FontData::from_owned(data).into(),
+                    );
+                }
+            }
+            if fonts.font_data.contains_key(bold_path) {
+                general_fonts_list.push(bold_path.to_string());
+            }
+        }
+        // 复制 Proportional 中的所有字体作为回退
+        if let Some(prop_fonts) = fonts.families.get(&egui::FontFamily::Proportional) {
+            for key in prop_fonts {
+                if !general_fonts_list.contains(key) {
+                    general_fonts_list.push(key.clone());
+                }
+            }
+        }
+        fonts.families.insert(general_family, general_fonts_list);
 
         ctx.set_fonts(fonts);
     }
@@ -178,6 +215,18 @@ impl QTermApp {
     /// 获取终端字体 ID（等宽字体）
     fn shell_font_id(&self) -> egui::FontId {
         egui::FontId::monospace(self.preferences.shell_font_size)
+    }
+
+    /// 获取左侧面板字体 ID（使用 general 命名字体族，支持粗体）
+    fn sidebar_font_id(&self, size: f32) -> egui::FontId {
+        egui::FontId::new(size, egui::FontFamily::Name(std::sync::Arc::from("general")))
+    }
+
+    /// 使用 sidebar 字体渲染标签（绕过 egui 0.29 RichText.font() 的 bug）
+    fn sidebar_label(&self, ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32) {
+        let font_id = self.sidebar_font_id(size);
+        let galley = ui.fonts(|f| f.layout_no_wrap(text.to_string(), font_id, color));
+        ui.label(galley);
     }
 
     /// 创建新的本地终端标签页
@@ -400,9 +449,11 @@ impl eframe::App for QTermApp {
 
         // === 左侧面板：连接列表 ===
         if self.show_left_pane {
+            let left_bg = self.theme.system.app_left_list_bg_color;
             egui::SidePanel::left("left_panel")
-                .frame(egui::Frame::none())
+                .frame(egui::Frame::none().fill(left_bg))
                 .exact_width(LEFT_PANE_WIDTH)
+                .show_separator_line(false)
                 .show(ctx, |ui| {
                     self.render_left_pane(ui);
                 });
@@ -617,7 +668,7 @@ impl QTermApp {
                 }
 
                 // 最小化 / 最大化 / 关闭按钮（右上角）
-                let btn_w = 40.0;
+                let btn_w = 32.0;
                 let btn_h = title_bar_h;
                 let total_btn_w = btn_w * 3.0;
                 let right_rect = egui::Rect::from_min_size(
@@ -689,30 +740,36 @@ impl QTermApp {
                 use egui::ViewportCommand;
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right_rect), |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        // 最小化按钮
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new("-").size(13.0).color(text_color),
-                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
-                            ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                        let hover_bg = egui::Color32::from_white_alpha(20);
+                        let close_hover_bg = egui::Color32::from_rgb(232, 17, 35);
+                        let btn_size = egui::vec2(btn_w, btn_h);
+
+                        // 最小化
+                        let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(rect, 0.0, hover_bg);
                         }
-                        // 最大化/还原按钮
-                        let max_icon = if self.last_maximized { "❐" } else { "O" };
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new(max_icon).size(13.0).color(text_color),
-                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "\u{2013}", egui::FontId::proportional(14.0), text_color);
+                        if resp.clicked() { ctx.send_viewport_cmd(ViewportCommand::Minimized(true)); }
+
+                        // 最大化/还原
+                        let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(rect, 0.0, hover_bg);
+                        }
+                        let max_icon = if self.last_maximized { "\u{2750}" } else { "\u{25A1}" };
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, max_icon, egui::FontId::proportional(13.0), text_color);
+                        if resp.clicked() {
                             ctx.send_viewport_cmd(ViewportCommand::Maximized(!self.last_maximized));
                             self.last_maximized = !self.last_maximized;
                         }
-                        // 关闭按钮（悬停时变红色）
-                        let close_color = if ui.rect_contains_pointer(egui::Rect::from_min_size(
-                            egui::Pos2::new(ui.max_rect().right() - btn_w, ui.max_rect().top()),
-                            egui::vec2(btn_w, btn_h),
-                        )) { egui::Color32::from_rgb(232, 17, 35) } else { text_color };
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new("x").size(13.0).color(close_color),
-                        ).frame(false).min_size(egui::vec2(btn_w, btn_h))).clicked() {
-                            ctx.send_viewport_cmd(ViewportCommand::Close);
-                        }
+
+                        // 关闭
+                        let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let (bg, fg) = if resp.hovered() { (close_hover_bg, egui::Color32::WHITE) } else { (egui::Color32::TRANSPARENT, text_color) };
+                        if bg != egui::Color32::TRANSPARENT { ui.painter().rect_filled(rect, 0.0, bg); }
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "\u{2715}", egui::FontId::proportional(13.0), fg);
+                        if resp.clicked() { ctx.send_viewport_cmd(ViewportCommand::Close); }
                     });
                 });
             });
@@ -724,20 +781,17 @@ impl QTermApp {
 impl QTermApp {
     /// 渲染左侧面板内容
     fn render_left_pane(&mut self, ui: &mut egui::Ui) {
-        let left_list_bg = self.theme.system.app_left_list_bg_color;
         let text_color = self.theme.system.text_color;
-        let split_color = self.theme.system.app_split_color;
+        let fs = self.preferences.general_font_size;
 
         egui::Frame::none()
-            .fill(left_list_bg)
-            .stroke(egui::Stroke::new(1.0, split_color))
             .show(ui, |ui| {
                 ui.set_min_width(LEFT_PANE_WIDTH);
                 ui.set_max_width(LEFT_PANE_WIDTH);
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("终端").strong().color(text_color).size(14.0));
+                        self.sidebar_label(ui, "终端", fs, text_color);
                     });
                     ui.add_space(4.0);
                     ui.separator();
@@ -759,7 +813,7 @@ impl QTermApp {
                             let theme_label = if is_dark { "浅色" } else { "深色" };
                             if ui.button(theme_label).clicked() {
                                 self.theme.toggle_mode();
-                                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
+                                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), fs);
                             }
                         });
                         ui.add_space(2.0);
@@ -769,58 +823,98 @@ impl QTermApp {
     }
 
     /// 渲染终端连接面板
-    /// 显示 WhaleTerm 配置中的 SSH 连接列表和当前打开的标签页
     fn render_terminal_pane(&mut self, ui: &mut egui::Ui) {
         let side_text = self.theme.system.app_side_text_color;
         let text_color = self.theme.system.text_color;
         let active_bg = self.theme.system.app_left_list_bg_color_active;
         let active_fg = self.theme.system.app_left_list_text_color_active;
+        let hover_bg = self.theme.system.app_left_list_bg_color_hover;
+        let fs = self.preferences.general_font_size;
 
-        // 双击打开连接的索引
         let mut open_conn_idx: Option<usize> = None;
+        let mut toggle_group: Option<String> = None;
 
-        ui.vertical(|ui| {
+        // 使用 ScrollArea 包裹连接列表，支持滚动
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             ui.add_space(8.0);
 
-            // 显示 WhaleTerm 配置中的连接列表
             if !self.connections.is_empty() {
-                ui.label(egui::RichText::new("连接").size(12.0).color(side_text));
+                self.sidebar_label(ui, "连接", fs - 1.0, side_text);
                 ui.add_space(4.0);
 
-                // 按分组名称显示连接
                 let mut current_group = "";
                 for (idx, conn) in self.connections.iter().enumerate() {
                     if conn.group_name != current_group {
                         current_group = &conn.group_name;
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(&conn.group_name).size(11.0).color(side_text).strong());
+                        let collapsed = self.collapsed_groups.contains(&conn.group_name);
+                        let arrow = if collapsed { "\u{25B6}" } else { "\u{25BC}" };
+
+                        ui.add_space(4.0);
+                        let grp_resp = egui::Frame::none()
+                            .rounding(egui::Rounding::same(3.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(4.0);
+                                    self.sidebar_label(ui, arrow, fs - 2.0, side_text);
+                                    self.sidebar_label(ui, &conn.group_name, fs - 2.0, side_text);
+                                });
+                            });
+                        // 双击分组名收缩/展开
+                        if grp_resp.response.double_clicked() {
+                            toggle_group = Some(conn.group_name.clone());
+                        }
                     }
 
-                    let label = &conn.name;
-                    let (bg, fg) = (egui::Color32::TRANSPARENT, text_color);
-                    let inner = egui::Frame::none()
-                        .fill(bg)
-                        .rounding(egui::Rounding::same(4.0))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.add_space(6.0);
-                                ui.label(egui::RichText::new(label).size(13.0).color(fg));
-                            });
-                        });
-                    // 双击连接项打开 SSH 会话
-                    if inner.response.double_clicked() {
+                    // 如果分组收缩，跳过该分组的连接
+                    if self.collapsed_groups.contains(&conn.group_name) {
+                        continue;
+                    }
+
+                    let is_selected = self.selected_connection == Some(idx);
+
+                    // 预分配交互区域以获取悬停状态
+                    let item_h = fs * 1.5;
+                    let (rect, resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), item_h),
+                        egui::Sense::click(),
+                    );
+                    let bg = if is_selected {
+                        active_bg
+                    } else if resp.hovered() {
+                        hover_bg
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let fg = if is_selected { active_fg } else { text_color };
+
+                    if bg != egui::Color32::TRANSPARENT {
+                        ui.painter().rect_filled(rect, 4.0, bg);
+                    }
+                    ui.painter().text(
+                        egui::Pos2::new(rect.min.x + 18.0, rect.min.y),
+                        egui::Align2::LEFT_TOP,
+                        &conn.name,
+                        self.sidebar_font_id(fs),
+                        fg,
+                    );
+
+                    if resp.clicked() {
+                        self.selected_connection = Some(idx);
+                    }
+                    if resp.double_clicked() {
                         open_conn_idx = Some(idx);
                     }
                 }
             } else {
-                ui.label(egui::RichText::new("未找到连接配置。").size(12.0).color(side_text));
+                self.sidebar_label(ui, "未找到连接配置。", fs - 1.0, side_text);
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("WhaleTerm 配置不可用。").size(11.0).color(side_text));
+                self.sidebar_label(ui, "WhaleTerm 配置不可用。", fs - 2.0, side_text);
             }
 
-            // 显示当前打开的标签页列表
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("打开的标签").size(12.0).color(side_text));
+            self.sidebar_label(ui, "打开的标签", fs - 1.0, side_text);
             ui.add_space(4.0);
             for (idx, tab) in self.tabs.iter().enumerate() {
                 let selected = idx == self.active_tab;
@@ -836,7 +930,7 @@ impl QTermApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
-                            ui.label(egui::RichText::new(label).size(13.0).color(fg));
+                            self.sidebar_label(ui, label, fs, fg);
                         });
                     });
                 if inner.response.clicked() {
@@ -844,6 +938,15 @@ impl QTermApp {
                 }
             }
         });
+
+        // 处理分组收缩/展开
+        if let Some(group) = toggle_group {
+            if self.collapsed_groups.contains(&group) {
+                self.collapsed_groups.remove(&group);
+            } else {
+                self.collapsed_groups.insert(group);
+            }
+        }
 
         // 双击连接时打开新 SSH 标签页
         if let Some(idx) = open_conn_idx {
