@@ -153,6 +153,29 @@ fn log_monitors() {
     log_startup("显示器枚举仅支持 Windows 平台");
 }
 
+/// 获取主屏工作区中心坐标（物理像素），用于 --reset 居中
+#[cfg(windows)]
+fn primary_monitor_center(w: f32, h: f32) -> (f32, f32) {
+    #[repr(C)]
+    struct RECT { left: i32, top: i32, right: i32, bottom: i32 }
+    extern "system" {
+        fn SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: *mut RECT, fWinIni: u32) -> i32;
+    }
+    const SPI_GETWORKAREA: u32 = 48;
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rect, 0); }
+    let work_w = (rect.right - rect.left) as f32;
+    let work_h = (rect.bottom - rect.top) as f32;
+    let cx = rect.left as f32 + (work_w - w) / 2.0;
+    let cy = rect.top as f32 + (work_h - h) / 2.0;
+    (cx.max(0.0), cy.max(0.0))
+}
+
+#[cfg(not(windows))]
+fn primary_monitor_center(_w: f32, _h: f32) -> (f32, f32) {
+    (100.0, 100.0)
+}
+
 /// 解析 --setpos x,y 命令行参数
 fn parse_setpos(value: &str) -> Option<(f32, f32)> {
     let parts: Vec<&str> = value.split(',').collect();
@@ -190,8 +213,12 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([800.0, 500.0]);
 
     // 从配置恢复窗口尺寸（确保不低于最小值）
-    let w = cfg.window_width.unwrap_or(1100.0).max(800.0);
-    let h = cfg.window_height.unwrap_or(700.0).max(500.0);
+    let (w, h) = if reset {
+        log_startup("--reset 模式，使用默认尺寸 1200x800");
+        (1200.0f32, 800.0f32)
+    } else {
+        (cfg.window_width.unwrap_or(1100.0).max(800.0), cfg.window_height.unwrap_or(700.0).max(500.0))
+    };
     viewport = viewport.with_inner_size([w, h]);
 
     log_startup(&format!(
@@ -202,8 +229,9 @@ fn main() -> eframe::Result<()> {
     // 计算目标窗口位置（延迟到第 2 帧设置，不在创建时定位）
     // 优先级：--reset > --setpos > 配置文件 > 系统默认
     let target_pos: Option<(f32, f32)> = if reset {
-        log_startup("--reset 模式，使用系统默认位置");
-        None
+        let (cx, cy) = primary_monitor_center(w, h);
+        log_startup(&format!("--reset 模式，主屏居中: ({}, {})", cx, cy));
+        Some((cx, cy))
     } else if let Some(pos) = setpos {
         log_startup(&format!("--setpos 指定位置: ({}, {})", pos.0, pos.1));
         Some(pos)
@@ -223,7 +251,8 @@ fn main() -> eframe::Result<()> {
     };
 
     // 从配置恢复最大化状态（最大化不受 DPI 影响，可在创建时设置）
-    if cfg.maximized {
+    // --reset 时强制不最大化
+    if cfg.maximized && !reset {
         viewport = viewport.with_maximized(true);
     }
 

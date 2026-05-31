@@ -467,7 +467,7 @@ impl eframe::App for QTermApp {
         if self.show_left_pane {
             let left_bg = self.theme.system.app_left_list_bg_color;
             egui::SidePanel::left("left_panel")
-                .frame(egui::Frame::none().fill(left_bg))
+                .frame(egui::Frame::none().fill(self.theme.system.app_left_list_bg_color))
                 .exact_width(LEFT_PANE_WIDTH)
                 .show_separator_line(false)
                 .show(ctx, |ui| {
@@ -480,7 +480,7 @@ impl eframe::App for QTermApp {
 
         // === 中央面板：终端区域 ===
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(self.theme.system.app_content_term_bg_color))
+            .frame(egui::Frame::none().fill(self.theme.terminal.background))
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     ui.centered_and_justified(|ui| {
@@ -554,7 +554,7 @@ impl eframe::App for QTermApp {
                                     egui::Stroke::NONE
                                 };
                                 egui::Frame::none()
-                                    .fill(self.theme.system.app_content_term_bg_color)
+                                    .fill(self.theme.terminal.background)
                                     .stroke(stroke)
                                     .show(ui, |ui| {
                                         ui.set_max_height(pane_height - 2.0);
@@ -590,7 +590,7 @@ impl eframe::App for QTermApp {
                                         egui::Stroke::NONE
                                     };
                                     egui::Frame::none()
-                                        .fill(self.theme.system.app_content_term_bg_color)
+                                        .fill(self.theme.terminal.background)
                                         .stroke(stroke)
                                         .show(ui, |ui| {
                                             ui.set_max_width(pane_width - 2.0);
