@@ -698,16 +698,19 @@ impl QTermApp {
                 }
 
                 // 最小化 / 最大化 / 关闭按钮（右上角）
+                // 用 ctx.screen_rect() 而非 ui.max_rect()，确保贴紧窗口真实右边缘
                 let btn_w = 32.0;
                 let btn_h = title_bar_h;
                 let total_btn_w = btn_w * 3.0;
+                let screen_right = ctx.screen_rect().right();
                 let right_rect = egui::Rect::from_min_size(
-                    egui::Pos2::new(ui.max_rect().right() - total_btn_w, ui.max_rect().top()),
+                    egui::Pos2::new(screen_right - total_btn_w, ui.max_rect().top()),
                     egui::vec2(total_btn_w, btn_h),
                 );
 
-                // 左侧：标题 + 标签页
+                // 左侧：标题 + 标签页（限制最大宽度，不得侵入右侧按钮区）
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_max_width(screen_right - total_btn_w - ui.min_rect().left());
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text));
                     ui.add_space(16.0);
