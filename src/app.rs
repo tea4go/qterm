@@ -702,16 +702,6 @@ impl QTermApp {
             .frame(egui::Frame::none().fill(app_bg))
             .exact_height(title_bar_h)
             .show(ctx, |ui| {
-                // 窗口拖拽区域（仅拖拽，不拦截点击，避免影响标签页交互）
-                let title_bar_response = ui.interact(
-                    ui.max_rect(),
-                    egui::Id::new("title_bar_drag"),
-                    egui::Sense::drag(),
-                );
-                if title_bar_response.dragged() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-
                 // 计算窗口控制按钮占据的右侧区域
                 let btn_w = 32.0;
                 let btn_h = title_bar_h;
@@ -725,111 +715,113 @@ impl QTermApp {
                 // 左侧面板宽度（标题栏左区宽度应对齐左侧面板）
                 let left_w = if self.show_left_pane { self.left_pane_width } else { 0.0 };
 
-                // === 标题栏左区：QTerm 标题 ===
-                if left_w > 0.0 {
-                    let left_rect = egui::Rect::from_min_size(
-                        ui.max_rect().min,
-                        egui::vec2(left_w, title_bar_h),
-                    );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(left_rect), |ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add_space(10.0);
-                            // QTerm 标题（双击切换最大化）
-                            let label_resp = ui.add(
-                                egui::Label::new(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text))
-                                    .sense(egui::Sense::click()),
-                            );
-                            if label_resp.double_clicked() {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
-                                self.last_maximized = !is_maximized;
-                            }
-                        });
-                    });
-                }
+                // 使用父 UI 常规布局（不使用 allocate_new_ui），确保标签页点击正常
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // 限制最大宽度，不得侵入右侧窗口按钮区
+                    ui.set_max_width(screen_right - total_btn_w - ui.min_rect().left());
 
-                // 绘制左区和右区之间的分隔线（与左侧面板分隔线对齐）
-                if left_w > 0.0 {
-                    let line_x = ui.max_rect().left() + left_w;
-                    ui.painter().line_segment(
-                        [
-                            egui::Pos2::new(line_x, ui.max_rect().top()),
-                            egui::Pos2::new(line_x, ui.max_rect().bottom()),
-                        ],
-                        egui::Stroke::new(1.0, split_color),
-                    );
-                }
+                    // === 标题栏左区：QTerm 标题（可拖拽、双击最大化） ===
+                    if left_w > 0.0 {
+                        let (left_rect, left_resp) = ui.allocate_exact_size(
+                            egui::vec2(left_w, title_bar_h),
+                            egui::Sense::click_and_drag(),
+                        );
+                        // 双击切换最大化
+                        if left_resp.double_clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                            self.last_maximized = !is_maximized;
+                        }
+                        // 拖拽移动窗口
+                        if left_resp.dragged() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                        // 绘制 QTerm 标题文字
+                        ui.painter().text(
+                            egui::Pos2::new(left_rect.min.x + 10.0, left_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            "QTerm",
+                            egui::FontId::proportional(18.0),
+                            header_text,
+                        );
+                        // 绘制左右区之间的分隔线
+                        ui.painter().line_segment(
+                            [left_rect.right_top(), left_rect.right_bottom()],
+                            egui::Stroke::new(1.0, split_color),
+                        );
+                    }
 
-                // === 标题栏右区：终端标签页 ===
-                let right_start_x = if left_w > 0.0 { ui.max_rect().left() + left_w } else { ui.max_rect().left() };
-                let right_area_w = screen_right - total_btn_w - right_start_x;
-                if right_area_w > 0.0 {
-                    let right_content_rect = egui::Rect::from_min_size(
-                        egui::Pos2::new(right_start_x, ui.max_rect().top()),
-                        egui::vec2(right_area_w, title_bar_h),
-                    );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right_content_rect), |ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add_space(4.0);
+                    // === 标题栏右区：终端标签页 ===
+                    ui.add_space(4.0);
+                    let mut close_idx = None;
+                    let tab_h = title_bar_h - 6.0;
 
-                            let mut close_idx = None;
-                            let tab_h = title_bar_h - 6.0;
+                    for (idx, tab) in self.tabs.iter().enumerate() {
+                        let selected = idx == self.active_tab;
+                        let label = if tab.alive() { &tab.title } else { "[已关闭]" };
 
-                            for (idx, tab) in self.tabs.iter().enumerate() {
-                                let selected = idx == self.active_tab;
-                                let label = if tab.alive() { &tab.title } else { "[已关闭]" };
+                        let (fg, bg) = if selected {
+                            (text_active, hover_bg)
+                        } else {
+                            (side_text, egui::Color32::TRANSPARENT)
+                        };
 
-                                let (fg, bg) = if selected {
-                                    (text_active, hover_bg)
-                                } else {
-                                    (side_text, egui::Color32::TRANSPARENT)
-                                };
+                        let tab_frame = egui::Frame::none()
+                            .fill(bg)
+                            .rounding(egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 });
 
-                                let tab_frame = egui::Frame::none()
-                                    .fill(bg)
-                                    .rounding(egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 });
-
-                                let inner = tab_frame.show(ui, |ui| {
-                                    ui.set_min_height(tab_h);
-                                    ui.set_max_height(tab_h);
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(5.0);
-                                        ui.label(egui::RichText::new(label).color(fg).size(13.0));
-                                        ui.add_space(4.0);
-                                        // 关闭标签按钮
-                                        let close_btn = ui.add(egui::Button::new(
-                                            egui::RichText::new("x").size(11.0).color(fg),
-                                        ).frame(false).min_size(egui::vec2(30.0, 20.0)));
-                                        if close_btn.clicked() {
-                                            close_idx = Some(idx);
-                                        }
-                                        close_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
-                                        ui.add_space(4.0);
-                                    });
-                                });
-
-                                // 点击标签页切换活动标签
-                                if inner.response.clicked() {
-                                    self.active_tab = idx;
+                        let inner = tab_frame.show(ui, |ui| {
+                            ui.set_min_height(tab_h);
+                            ui.set_max_height(tab_h);
+                            ui.horizontal(|ui| {
+                                ui.add_space(5.0);
+                                ui.label(egui::RichText::new(label).color(fg).size(13.0));
+                                ui.add_space(4.0);
+                                // 关闭标签按钮
+                                let close_btn = ui.add(egui::Button::new(
+                                    egui::RichText::new("x").size(11.0).color(fg),
+                                ).frame(false).min_size(egui::vec2(30.0, 20.0)));
+                                if close_btn.clicked() {
+                                    close_idx = Some(idx);
                                 }
-                                inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                                ui.add_space(1.0);
-                            }
-
-                            // "+" 新建标签按钮
-                            let add_btn = ui.add(egui::Button::new(
-                                egui::RichText::new("+").size(16.0).color(side_text),
-                            ).frame(false));
-                            if add_btn.clicked() {
-                                self.new_tab();
-                            }
-                            add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
-
-                            if let Some(idx) = close_idx {
-                                self.close_tab(idx);
-                            }
+                                close_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                ui.add_space(4.0);
+                            });
                         });
-                    });
-                }
+
+                        // 点击标签页切换活动标签
+                        if inner.response.clicked() {
+                            self.active_tab = idx;
+                        }
+                        inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        ui.add_space(1.0);
+                    }
+
+                    // "+" 新建标签按钮
+                    let add_btn = ui.add(egui::Button::new(
+                        egui::RichText::new("+").size(16.0).color(side_text),
+                    ).frame(false));
+                    if add_btn.clicked() {
+                        self.new_tab();
+                    }
+                    add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    // 标签后的空白区域可拖拽移动窗口
+                    if ui.available_width() > 0.0 {
+                        let empty_rect = ui.available_rect_before_wrap();
+                        let empty_resp = ui.interact(
+                            empty_rect,
+                            egui::Id::new("title_bar_drag_empty"),
+                            egui::Sense::drag(),
+                        );
+                        if empty_resp.dragged() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                    }
+
+                    if let Some(idx) = close_idx {
+                        self.close_tab(idx);
+                    }
+                });
 
                 // === 窗口控制按钮（右上角绝对定位） ===
                 use egui::ViewportCommand;
