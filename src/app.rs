@@ -772,6 +772,8 @@ impl QTermApp {
                 // 窗口控制按钮（右上角绝对定位）
                 use egui::ViewportCommand;
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                    // 关闭 item_spacing，让3个按钮紧密排列，不超出 right_rect 范围
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let hover_bg = egui::Color32::from_white_alpha(20);
                         let close_hover_bg = egui::Color32::from_rgb(232, 17, 35);
