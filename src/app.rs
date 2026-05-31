@@ -702,16 +702,12 @@ impl QTermApp {
             .frame(egui::Frame::none().fill(app_bg))
             .exact_height(title_bar_h)
             .show(ctx, |ui| {
-                // 窗口拖拽区域（双击切换最大化）
+                // 窗口拖拽区域（仅拖拽，不拦截点击，避免影响标签页交互）
                 let title_bar_response = ui.interact(
                     ui.max_rect(),
                     egui::Id::new("title_bar_drag"),
-                    egui::Sense::click_and_drag(),
+                    egui::Sense::drag(),
                 );
-                if title_bar_response.double_clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
-                    self.last_maximized = !is_maximized;
-                }
                 if title_bar_response.dragged() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
@@ -738,7 +734,15 @@ impl QTermApp {
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(left_rect), |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.add_space(10.0);
-                            ui.label(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text));
+                            // QTerm 标题（双击切换最大化）
+                            let label_resp = ui.add(
+                                egui::Label::new(egui::RichText::new("QTerm").font(egui::FontId::proportional(18.0)).strong().color(header_text))
+                                    .sense(egui::Sense::click()),
+                            );
+                            if label_resp.double_clicked() {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                                self.last_maximized = !is_maximized;
+                            }
                         });
                     });
                 }
