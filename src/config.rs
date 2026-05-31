@@ -47,6 +47,7 @@ pub struct AppConfig {
     pub scrollback_lines: usize,     // 回滚缓冲区行数
     pub theme: String,               // 主题名称（dark/light）
     pub shell_path: String,          // 自定义 Shell 路径
+    pub left_pane_width: f32,        // 左侧面板宽度
 }
 
 impl Default for AppConfig {
@@ -61,6 +62,7 @@ impl Default for AppConfig {
             scrollback_lines: 1000,
             theme: "dark".to_string(),
             shell_path: String::new(),
+            left_pane_width: 220.0,
         }
     }
 }
@@ -94,6 +96,10 @@ impl AppConfig {
                 .cloned()
                 .unwrap_or_else(|| "dark".to_string()),
             shell_path: map.get("shell_path").cloned().unwrap_or_default(),
+            left_pane_width: map
+                .get("left_pane_width")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(220.0),
         }
     }
 
@@ -122,6 +128,7 @@ impl AppConfig {
         if !self.shell_path.is_empty() {
             lines.push(format!("shell_path={}", self.shell_path));
         }
+        lines.push(format!("left_pane_width={}", self.left_pane_width));
         let _ = std::fs::write(&path, lines.join("\n"));
     }
 }

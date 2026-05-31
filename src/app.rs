@@ -10,7 +10,8 @@ use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
 
 // UI 常量尺寸
 const TITLE_BAR_HEIGHT: f32 = 40.0;  // 标题栏高度
-const LEFT_PANE_WIDTH: f32 = 220.0;   // 左侧面板宽度
+const LEFT_PANE_MIN_WIDTH: f32 = 150.0;  // 左侧面板最小宽度
+const LEFT_PANE_MAX_WIDTH: f32 = 500.0;  // 左侧面板最大宽度
 
 /// QTerm 应用主结构体
 /// 管理 UI 状态、标签页、配置、主题、SSH对话框等
@@ -30,6 +31,7 @@ pub struct QTermApp {
     ssh_dialog: crate::ui::ssh_dialog::SshDialog,  // SSH 连接对话框
     sftp_error: Option<String>,           // SFTP 错误信息
     show_left_pane: bool,                 // 是否显示左侧面板
+    left_pane_width: f32,                 // 左侧面板宽度（可拖动调整）
     context_menu: ContextMenu,            // 右键上下文菜单
     pending_mouse: Option<PendingMouse>,  // 待处理的鼠标事件
     connections: Vec<Connection>,          // WhaleTerm 连接列表
@@ -69,6 +71,7 @@ impl QTermApp {
         let theme = if is_dark { AppTheme::dark() } else { AppTheme::light() };
         let font_size = preferences.shell_font_size;
         theme.system.apply_to_egui(&cc.egui_ctx, is_dark, preferences.general_font_size);
+        let left_pane_width = config.left_pane_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
         let mut app = Self {
             tabs: Vec::new(),
             active_tab: 0,
@@ -85,6 +88,7 @@ impl QTermApp {
             ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
             sftp_error: None,
             show_left_pane: true,
+            left_pane_width,
             context_menu: ContextMenu::default(),
             pending_mouse: None,
             connections: Vec::new(),
@@ -465,6 +469,7 @@ impl eframe::App for QTermApp {
 
         // === 左侧面板：连接列表 ===
         if self.show_left_pane {
+            let panel_width = self.left_pane_width;
             egui::SidePanel::left("left_panel")
                 .frame(egui::Frame {
                     fill: self.theme.system.app_bg_color,
@@ -472,10 +477,15 @@ impl eframe::App for QTermApp {
                     outer_margin: egui::Margin::same(0.0),
                     ..Default::default()
                 })
-                .exact_width(LEFT_PANE_WIDTH)
-                .resizable(false)
-                .show_separator_line(false)
+                .min_width(LEFT_PANE_MIN_WIDTH)
+                .max_width(LEFT_PANE_MAX_WIDTH)
+                .default_width(panel_width)
+                .resizable(true)
+                .show_separator_line(true)
                 .show(ctx, |ui| {
+                    // 追踪用户拖动分隔条后的面板宽度变化
+                    let new_width = ui.min_rect().width();
+                    self.left_pane_width = new_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
                     // 强制限制宽度并裁剪超出内容，防止面板撑大
                     let clip = ui.max_rect();
                     ui.set_clip_rect(clip);
@@ -657,6 +667,7 @@ impl eframe::App for QTermApp {
         self.config.window_height = self.last_window_size.map(|(_, h)| h);
         self.config.maximized = self.last_maximized;
         self.config.theme = if self.theme.is_dark() { "dark".to_string() } else { "light".to_string() };
+        self.config.left_pane_width = self.left_pane_width;
         self.config.save();
         for tab in &mut self.tabs {
             tab.close();
@@ -820,9 +831,8 @@ impl QTermApp {
         let fs = self.preferences.general_font_size;
 
         egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(5.0, 0.0))
             .show(ui, |ui| {
-                ui.set_min_width(LEFT_PANE_WIDTH);
-                ui.set_max_width(LEFT_PANE_WIDTH);
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -872,7 +882,6 @@ impl QTermApp {
         // 使用 ScrollArea 包裹连接列表，支持滚动
         egui::ScrollArea::vertical()
             .auto_shrink([true, true])
-            .max_width(LEFT_PANE_WIDTH)
             .show(ui, |ui| {
             ui.add_space(8.0);
 
@@ -885,20 +894,38 @@ impl QTermApp {
                     if conn.group_name != current_group {
                         current_group = &conn.group_name;
                         let collapsed = self.collapsed_groups.contains(&conn.group_name);
-                        let arrow = if collapsed { "\u{25B6}" } else { "\u{25BC}" };
 
                         ui.add_space(4.0);
-                        let grp_resp = egui::Frame::none()
-                            .rounding(egui::Rounding::same(3.0))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(4.0);
-                                    self.sidebar_label(ui, arrow, fs - 2.0, side_text);
-                                    self.sidebar_label(ui, &conn.group_name, fs - 2.0, side_text);
-                                });
-                            });
+                        let item_h = fs * 1.6;
+                        let item_w = ui.available_width();
+                        let (rect, grp_resp) = ui.allocate_exact_size(
+                            egui::vec2(item_w, item_h),
+                            egui::Sense::click(),
+                        );
+                        // 悬停背景
+                        let grp_bg = if grp_resp.hovered() { hover_bg } else { egui::Color32::TRANSPARENT };
+                        if grp_bg != egui::Color32::TRANSPARENT {
+                            ui.painter().rect_filled(rect, 3.0, grp_bg);
+                        }
+                        // 左侧：分组名称
+                        ui.painter().text(
+                            egui::Pos2::new(rect.min.x + 6.0, rect.min.y + (item_h - (fs - 2.0)) * 0.5),
+                            egui::Align2::LEFT_TOP,
+                            &conn.group_name,
+                            self.sidebar_font_id(fs - 2.0),
+                            side_text,
+                        );
+                        // 右侧：展开/收缩箭头图标
+                        let arrow = if collapsed { "\u{25B6}" } else { "\u{25BC}" };
+                        ui.painter().text(
+                            egui::Pos2::new(rect.max.x - 6.0, rect.min.y + (item_h - (fs - 2.0)) * 0.5),
+                            egui::Align2::RIGHT_TOP,
+                            arrow,
+                            self.sidebar_font_id(fs - 2.0),
+                            side_text,
+                        );
                         // 双击分组名收缩/展开
-                        if grp_resp.response.double_clicked() {
+                        if grp_resp.double_clicked() {
                             toggle_group = Some(conn.group_name.clone());
                         }
                     }
@@ -912,7 +939,7 @@ impl QTermApp {
 
                     // 预分配交互区域以获取悬停状态（固定宽度避免撑大左侧面板）
                     let item_h = fs * 1.5;
-                    let item_w = ui.available_width().min(LEFT_PANE_WIDTH);
+                    let item_w = ui.available_width();
                     let (rect, resp) = ui.allocate_exact_size(
                         egui::vec2(item_w, item_h),
                         egui::Sense::click(),
@@ -963,7 +990,7 @@ impl QTermApp {
                 };
                 // 使用固定宽度分配，避免长标题撑大面板
                 let item_h = fs * 1.6;
-                let item_w = ui.available_width().min(LEFT_PANE_WIDTH);
+                let item_w = ui.available_width();
                 let (rect, resp) = ui.allocate_exact_size(
                     egui::vec2(item_w, item_h),
                     egui::Sense::click(),
