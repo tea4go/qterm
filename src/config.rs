@@ -6,7 +6,7 @@ use serde::Deserialize;
 /// 获取应用配置目录路径
 /// Windows: %APPDATA%\qterm
 /// 其他: ~/.config/qterm
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {

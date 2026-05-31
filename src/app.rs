@@ -20,11 +20,13 @@ pub struct QTermApp {
     config: AppConfig,                    // 应用配置
     preferences: Preferences,             // 偏好设置（字体、主题）
     theme: AppTheme,                      // 当前主题
-    last_window_pos: Option<(f32, f32)>,  // 上次窗口位置
-    last_window_size: Option<(f32, f32)>, // 上次窗口尺寸
+    last_window_pos: Option<(f32, f32)>,  // 上次窗口位置（物理像素）
+    last_window_size: Option<(f32, f32)>, // 上次窗口尺寸（egui points）
     last_maximized: bool,                 // 上次最大化状态
     last_cols: usize,                     // 上次终端列数
     last_rows: usize,                     // 上次终端行数
+    frame_count: u32,                     // 帧计数器（用于延迟定位）
+    target_physical_pos: Option<(f32, f32)>, // 目标窗口位置（物理像素，第 2 帧应用）
     ssh_dialog: crate::ui::ssh_dialog::SshDialog,  // SSH 连接对话框
     sftp_error: Option<String>,           // SFTP 错误信息
     show_left_pane: bool,                 // 是否显示左侧面板
@@ -60,7 +62,7 @@ struct PendingMouse {
 impl QTermApp {
     /// 创建 QTermApp 实例
     /// 初始化字体、主题、偏好设置，创建第一个本地终端标签页
-    pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig, target_pos: Option<(f32, f32)>) -> Self {
         let preferences = Preferences::load();
         Self::configure_fonts(&cc.egui_ctx, &preferences);
         let is_dark = preferences.theme != "light";
@@ -78,6 +80,8 @@ impl QTermApp {
             last_maximized: false,
             last_cols: 80,
             last_rows: 24,
+            frame_count: 0,
+            target_physical_pos: target_pos,
             ssh_dialog: crate::ui::ssh_dialog::SshDialog::new(),
             sftp_error: None,
             show_left_pane: true,
@@ -326,6 +330,16 @@ enum Action {
 
 impl eframe::App for QTermApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 第 2 帧延迟定位窗口（第 1 帧 DPI 缩放因子尚未准确）
+        self.frame_count += 1;
+        if self.frame_count == 2 {
+            if let Some((px, py)) = self.target_physical_pos.take() {
+                let ppp = ctx.pixels_per_point();
+                let pos = egui::pos2(px / ppp, py / ppp);
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            }
+        }
+
         // 接收后台线程加载的连接列表
         if let Some(rx) = self.connections_rx.take() {
             match rx.try_recv() {
@@ -340,14 +354,16 @@ impl eframe::App for QTermApp {
             tab.poll();
         }
 
-        // 记录窗口位置和尺寸
+        // 记录窗口位置和尺寸（位置转物理像素，尺寸保持 egui points）
+        let ppp = ctx.pixels_per_point();
         ctx.input(|i| {
             if let Some(rect) = i.viewport().inner_rect {
                 self.last_window_size = Some((rect.width(), rect.height()));
             }
-            if let Some(pos) = i.viewport().outer_rect {
-                self.last_window_pos = Some((pos.min.x, pos.min.y));
+            if let Some(rect) = i.viewport().outer_rect {
+                self.last_window_pos = Some((rect.min.x * ppp, rect.min.y * ppp));
             }
+            self.last_maximized = i.viewport().maximized.unwrap_or(false);
         });
 
         // 处理全局快捷键
@@ -626,6 +642,7 @@ impl eframe::App for QTermApp {
         self.config.window_y = self.last_window_pos.map(|(_, y)| y);
         self.config.window_width = self.last_window_size.map(|(w, _)| w);
         self.config.window_height = self.last_window_size.map(|(_, h)| h);
+        self.config.maximized = self.last_maximized;
         self.config.theme = if self.theme.is_dark() { "dark".to_string() } else { "light".to_string() };
         self.config.save();
         for tab in &mut self.tabs {
