@@ -893,9 +893,6 @@ impl QTermApp {
             ui.add_space(8.0);
 
             if !self.connections.is_empty() {
-                self.sidebar_label(ui, "连接", fs - 1.0, side_text);
-                ui.add_space(4.0);
-
                 let mut current_group = "";
                 for (idx, conn) in self.connections.iter().enumerate() {
                     if conn.group_name != current_group {
