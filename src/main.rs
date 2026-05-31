@@ -191,7 +191,7 @@ fn parse_setpos(value: &str) -> Option<(f32, f32)> {
 /// 应用程序入口函数
 /// 加载配置，创建窗口，启动 egui/eframe 渲染循环
 fn main() -> eframe::Result<()> {
-    set_dpi_awareness();
+    // 注意：不调用 set_dpi_awareness()，eframe/winit 已内置 DPI 处理
 
     // 启动日志
     log_startup("========== QTerm 启动 ==========");

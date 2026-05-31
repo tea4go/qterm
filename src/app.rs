@@ -466,7 +466,12 @@ impl eframe::App for QTermApp {
         // === 左侧面板：连接列表 ===
         if self.show_left_pane {
             egui::SidePanel::left("left_panel")
-                .frame(egui::Frame::none().fill(self.theme.system.app_left_list_bg_color))
+                .frame(egui::Frame {
+                    fill: egui::Color32::RED,
+                    inner_margin: egui::Margin::same(0.0),
+                    outer_margin: egui::Margin::same(0.0),
+                    ..Default::default()
+                })
                 .exact_width(LEFT_PANE_WIDTH)
                 .show_separator_line(false)
                 .show(ctx, |ui| {
@@ -479,7 +484,12 @@ impl eframe::App for QTermApp {
 
         // === 中央面板：终端区域 ===
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(self.theme.terminal.background))
+            .frame(egui::Frame {
+                fill: self.theme.terminal.background,
+                inner_margin: egui::Margin::same(0.0),
+                outer_margin: egui::Margin::same(0.0),
+                ..Default::default()
+            })
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     ui.centered_and_justified(|ui| {
