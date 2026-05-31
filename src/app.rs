@@ -465,7 +465,6 @@ impl eframe::App for QTermApp {
 
         // === 左侧面板：连接列表 ===
         if self.show_left_pane {
-            let left_bg = self.theme.system.app_left_list_bg_color;
             egui::SidePanel::left("left_panel")
                 .frame(egui::Frame::none().fill(self.theme.system.app_left_list_bg_color))
                 .exact_width(LEFT_PANE_WIDTH)
