@@ -31,6 +31,7 @@ pub struct QTermApp {
     context_menu: ContextMenu,            // 右键上下文菜单
     pending_mouse: Option<PendingMouse>,  // 待处理的鼠标事件
     connections: Vec<Connection>,          // WhaleTerm 连接列表
+    connections_rx: Option<std::sync::mpsc::Receiver<Vec<Connection>>>,
 }
 
 /// 右键上下文菜单状态
@@ -60,8 +61,6 @@ impl QTermApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         let preferences = Preferences::load();
         Self::configure_fonts(&cc.egui_ctx, &preferences);
-
-        // 根据偏好设置确定主题模式
         let is_dark = preferences.theme != "light";
         let theme = if is_dark { AppTheme::dark() } else { AppTheme::light() };
         let font_size = preferences.shell_font_size;
@@ -82,13 +81,19 @@ impl QTermApp {
             show_left_pane: true,
             context_menu: ContextMenu::default(),
             pending_mouse: None,
-            connections: crate::connection::load_connections(),
+            connections: Vec::new(),
+            connections_rx: {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let conns = crate::connection::load_connections();
+                    let _ = tx.send(conns);
+                });
+                Some(rx)
+            },
         };
-        // 设置终端字体大小和粗体
         app.theme.terminal.font_size = font_size;
         app.theme.terminal.font_bold = app.preferences.shell_font_bold;
         app.config.font_size = font_size;
-        // 创建初始本地终端标签页
         app.new_tab();
         app
     }
@@ -272,6 +277,15 @@ enum Action {
 
 impl eframe::App for QTermApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 接收后台线程加载的连接列表
+        if let Some(rx) = self.connections_rx.take() {
+            match rx.try_recv() {
+                Ok(conns) => self.connections = conns,
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.connections_rx = Some(rx),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+
         // 轮询所有标签页（读取终端输出数据）
         for tab in &mut self.tabs {
             tab.poll();
