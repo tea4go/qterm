@@ -757,6 +757,7 @@ impl QTermApp {
                                 if close_btn.clicked() {
                                     close_idx = Some(idx);
                                 }
+                                close_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
                                 ui.add_space(4.0);
                             });
                         });
@@ -765,15 +766,18 @@ impl QTermApp {
                         if inner.response.clicked() {
                             self.active_tab = idx;
                         }
+                        inner.response.on_hover_cursor(egui::CursorIcon::PointingHand);
                         ui.add_space(1.0);
                     }
 
                     // "+" 新建标签按钮
-                    if ui.add(egui::Button::new(
+                    let add_btn = ui.add(egui::Button::new(
                         egui::RichText::new("+").size(16.0).color(side_text),
-                    ).frame(false)).clicked() {
+                    ).frame(false));
+                    if add_btn.clicked() {
                         self.new_tab();
                     }
+                    add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
 
                     if let Some(idx) = close_idx {
                         self.close_tab(idx);
@@ -792,6 +796,7 @@ impl QTermApp {
 
                         // 最小化
                         let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.hovered() {
                             ui.painter().rect_filled(rect, 0.0, hover_bg);
                         }
@@ -800,6 +805,7 @@ impl QTermApp {
 
                         // 最大化/还原
                         let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.hovered() {
                             ui.painter().rect_filled(rect, 0.0, hover_bg);
                         }
@@ -812,6 +818,7 @@ impl QTermApp {
 
                         // 关闭
                         let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let (bg, fg) = if resp.hovered() { (close_hover_bg, egui::Color32::WHITE) } else { (egui::Color32::TRANSPARENT, text_color) };
                         if bg != egui::Color32::TRANSPARENT { ui.painter().rect_filled(rect, 0.0, bg); }
                         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "\u{2715}", egui::FontId::proportional(13.0), fg);
@@ -902,8 +909,9 @@ impl QTermApp {
                             egui::vec2(item_w, item_h),
                             egui::Sense::click(),
                         );
-                        // 悬停背景
+                        // 悬停背景 + 手型光标
                         let grp_bg = if grp_resp.hovered() { hover_bg } else { egui::Color32::TRANSPARENT };
+                        let grp_resp = grp_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if grp_bg != egui::Color32::TRANSPARENT {
                             ui.painter().rect_filled(rect, 3.0, grp_bg);
                         }
@@ -924,8 +932,8 @@ impl QTermApp {
                             self.sidebar_font_id(fs - 2.0),
                             side_text,
                         );
-                        // 双击分组名收缩/展开
-                        if grp_resp.double_clicked() {
+                        // 单击分组名收缩/展开
+                        if grp_resp.clicked() {
                             toggle_group = Some(conn.group_name.clone());
                         }
                     }
@@ -952,6 +960,7 @@ impl QTermApp {
                         egui::Color32::TRANSPARENT
                     };
                     let fg = if is_selected { active_fg } else { text_color };
+                    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
                     if bg != egui::Color32::TRANSPARENT {
                         ui.painter().rect_filled(rect, 4.0, bg);
@@ -995,6 +1004,7 @@ impl QTermApp {
                     egui::vec2(item_w, item_h),
                     egui::Sense::click(),
                 );
+                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                 if bg != egui::Color32::TRANSPARENT {
                     ui.painter().rect_filled(rect, 4.0, bg);
                 }
