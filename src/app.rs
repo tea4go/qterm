@@ -207,12 +207,46 @@ impl QTermApp {
         }
         fonts.families.insert(general_family, general_fonts_list);
 
+        // 注册命名字体族 "config"，用于标题栏标签页和状态栏
+        // 粗体时优先使用粗体字体变体
+        let config_family = egui::FontFamily::Name(std::sync::Arc::from("config"));
+        let mut config_fonts_list: Vec<String> = Vec::new();
+        if prefs.config_font_bold {
+            let bold_path = if cfg!(target_os = "windows") {
+                "C:\\Windows\\Fonts\\msyhbd.ttc"
+            } else if cfg!(target_os = "macos") {
+                "/System/Library/Fonts/PingFang.ttc"
+            } else {
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"
+            };
+            if !fonts.font_data.contains_key(bold_path) {
+                if let Ok(data) = std::fs::read(bold_path) {
+                    fonts.font_data.insert(
+                        bold_path.to_string(),
+                        egui::FontData::from_owned(data).into(),
+                    );
+                }
+            }
+            if fonts.font_data.contains_key(bold_path) {
+                config_fonts_list.push(bold_path.to_string());
+            }
+        }
+        // 复制 Proportional 中的所有字体作为回退
+        if let Some(prop_fonts) = fonts.families.get(&egui::FontFamily::Proportional) {
+            for key in prop_fonts {
+                if !config_fonts_list.contains(key) {
+                    config_fonts_list.push(key.clone());
+                }
+            }
+        }
+        fonts.families.insert(config_family, config_fonts_list);
+
         ctx.set_fonts(fonts);
     }
 
-    /// 获取配置区字体 ID
-    fn config_font_id(&self) -> egui::FontId {
-        egui::FontId::proportional(self.preferences.config_font_size)
+    /// 获取配置区字体 ID（标题栏标签页、状态栏使用）
+    fn config_font_id(&self, size: f32) -> egui::FontId {
+        egui::FontId::new(size, egui::FontFamily::Name(std::sync::Arc::from("config")))
     }
 
     /// 获取通用字体 ID（可指定大小）
@@ -234,6 +268,13 @@ impl QTermApp {
     /// 使用 sidebar 字体渲染标签（绕过 egui 0.29 RichText.font() 的 bug）
     fn sidebar_label(&self, ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32) {
         let font_id = self.sidebar_font_id(size);
+        let galley = ui.fonts(|f| f.layout_no_wrap(text.to_string(), font_id, color));
+        ui.label(galley);
+    }
+
+    /// 使用 config 字体渲染文本（标题栏标签页、状态栏使用）
+    fn config_label(&self, ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32) {
+        let font_id = self.config_font_id(size);
         let galley = ui.fonts(|f| f.layout_no_wrap(text.to_string(), font_id, color));
         ui.label(galley);
     }
@@ -266,6 +307,21 @@ impl QTermApp {
             }
         }
     }
+}
+
+/// 截断标签文字，限制显示宽度
+/// 每个ASCII字符计为1单位，CJK字符计为2单位（约等于2个ASCII宽度）
+/// 超过 max_width 单位时截断并添加省略号"…"
+fn truncate_label(text: &str, max_width: usize) -> String {
+    let mut w = 0usize;
+    for (i, ch) in text.char_indices() {
+        w += if ch > '\u{7FF}' { 2 } else { 1 }; // CJK等宽字符 > 0x7FF
+        if w > max_width {
+            let truncated: String = text[..i].chars().collect();
+            return truncated + "…";
+        }
+    }
+    text.to_string()
 }
 
 /// 根据字体名称查找系统字体文件路径
@@ -698,6 +754,13 @@ impl QTermApp {
         let side_text = self.theme.system.app_side_text_color;
         let is_maximized = self.last_maximized;
 
+        // config 字体大小比例系数（基准 = preferences.config_font_size）
+        let cfg_fs = self.preferences.config_font_size;
+        let title_fs = (cfg_fs * 0.82).max(12.0);    // "QTerm" 标题
+        let tab_fs = (cfg_fs * 0.59).max(10.0);      // 标签页文字
+        let close_fs = (cfg_fs * 0.5).max(8.0);      // 关闭按钮
+        let add_fs = (cfg_fs * 0.73).max(10.0);      // "+" 新建按钮
+
         egui::TopBottomPanel::top("title_bar")
             .frame(egui::Frame::none().fill(app_bg))
             .exact_height(title_bar_h)
@@ -740,7 +803,7 @@ impl QTermApp {
                             egui::Pos2::new(left_rect.min.x + 10.0, left_rect.center().y),
                             egui::Align2::LEFT_CENTER,
                             "QTerm",
-                            egui::FontId::proportional(18.0),
+                            self.config_font_id(title_fs),
                             header_text,
                         );
                         // 绘制左右区之间的分隔线
@@ -758,6 +821,8 @@ impl QTermApp {
                     for (idx, tab) in self.tabs.iter().enumerate() {
                         let selected = idx == self.active_tab;
                         let label = if tab.alive() { &tab.title } else { "[已关闭]" };
+                        // 截断标签文字：最多12个英文字符/6个汉字宽度（CJK=2单位，ASCII=1单位）
+                        let display_label = truncate_label(label, 12);
 
                         let (fg, bg) = if selected {
                             (text_active, hover_bg)
@@ -774,11 +839,11 @@ impl QTermApp {
                             ui.set_max_height(tab_h);
                             ui.horizontal(|ui| {
                                 ui.add_space(5.0);
-                                ui.label(egui::RichText::new(label).color(fg).size(13.0));
+                                self.config_label(ui, &display_label, tab_fs, fg);
                                 ui.add_space(4.0);
                                 // 关闭标签按钮
                                 let close_btn = ui.add(egui::Button::new(
-                                    egui::RichText::new("x").size(11.0).color(fg),
+                                    egui::RichText::new("x").size(close_fs).color(fg),
                                 ).frame(false).min_size(egui::vec2(30.0, 20.0)));
                                 if close_btn.clicked() {
                                     close_idx = Some(idx);
@@ -803,7 +868,7 @@ impl QTermApp {
 
                     // "+" 新建标签按钮
                     let add_btn = ui.add(egui::Button::new(
-                        egui::RichText::new("+").size(16.0).color(side_text),
+                        egui::RichText::new("+").size(add_fs).color(side_text),
                     ).frame(false));
                     if add_btn.clicked() {
                         self.new_tab();
@@ -1116,7 +1181,13 @@ impl QTermApp {
         let split_color = self.theme.system.app_split_color;
         let status_text = self.theme.system.app_status_bar_text_color;
         let connected_color = self.theme.extra.term_connected_color;
-        let height = self.theme.terminal.font_size * 2.0;
+
+        // config 字体大小比例系数（基准 = preferences.config_font_size）
+        let cfg_fs = self.preferences.config_font_size;
+        let status_fs = (cfg_fs * 0.55).max(9.0);    // 状态栏文字
+        let shortcut_fs = (cfg_fs * 0.68).max(10.0); // 快捷键提示
+
+        let height = cfg_fs * 1.8;
 
         egui::TopBottomPanel::bottom("foot_bar")
             .frame(egui::Frame::none()
@@ -1143,22 +1214,20 @@ impl QTermApp {
 
                     // 会话名称
                     let session_name = self.tabs.get(self.active_tab).map_or("无会话", |t| &t.title);
-                    ui.label(egui::RichText::new(session_name).size(12.0).color(status_text));
+                    self.config_label(ui, session_name, status_fs, status_text);
 
                     // 分隔符
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("|").size(12.0).color(status_text));
+                    self.config_label(ui, "|", status_fs, status_text);
                     ui.add_space(4.0);
                     // 连接状态文字
                     let extra_info = if connected { "已连接" } else { "已断开" };
-                    ui.label(egui::RichText::new(extra_info).size(12.0).color(status_text));
+                    self.config_label(ui, extra_info, status_fs, status_text);
 
                     // 右侧：快捷键提示
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Ctrl+T 新建 | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B 面板")
-                            .size(15.0)
-                            .color(status_text));
+                        self.config_label(ui, "Ctrl+T 新建 | Ctrl+Shift+N SSH | Ctrl+Shift+F SFTP | Ctrl+B 面板", shortcut_fs, status_text);
                         ui.add_space(8.0);
                     });
                 });
