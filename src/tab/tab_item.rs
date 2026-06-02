@@ -11,11 +11,13 @@ pub struct Tab {
 impl Tab {
     /// 创建本地终端标签页
     /// 初始化一个包含单个本地终端面板的布局
-    pub fn new_local(rows: usize, cols: usize, scrollback: usize, shell: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+    /// title: 可选的自定义标题，为空则使用 Shell 类型名称
+    pub fn new_local(rows: usize, cols: usize, scrollback: usize, shell: Option<&str>, title: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         let layout = SplitLayout::new_single_local(rows, cols, scrollback, shell)?;
+        let default_title = title.map(|t| t.to_string()).unwrap_or_else(|| "终端".to_string());
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
-            title: "终端".to_string(),
+            title: default_title,
             layout,
         })
     }

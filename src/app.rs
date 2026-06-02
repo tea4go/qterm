@@ -279,20 +279,38 @@ impl QTermApp {
         ui.label(galley);
     }
 
-    /// 创建新的本地终端标签页
+    /// 创建新的本地终端标签页（使用配置中的 shell_path 或系统默认）
     fn new_tab(&mut self) {
         let shell = if self.config.shell_path.is_empty() {
             None
         } else {
             Some(self.config.shell_path.as_str())
         };
-        match Tab::new_local(self.last_rows, self.last_cols, self.config.scrollback_lines, shell) {
+        match Tab::new_local(self.last_rows, self.last_cols, self.config.scrollback_lines, shell, None) {
             Ok(tab) => {
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
             }
             Err(e) => {
                 eprintln!("创建标签页失败: {}", e);
+            }
+        }
+    }
+
+    /// 创建指定 Shell 类型的本地终端标签页
+    fn new_tab_with_shell(&mut self, shell_type: crate::pty::ShellType) {
+        if let Some(path) = shell_type.shell_path() {
+            match Tab::new_local(
+                self.last_rows, self.last_cols, self.config.scrollback_lines,
+                Some(path.as_str()), Some(shell_type.label()),
+            ) {
+                Ok(tab) => {
+                    self.tabs.push(tab);
+                    self.active_tab = self.tabs.len() - 1;
+                }
+                Err(e) => {
+                    eprintln!("创建标签页失败: {}", e);
+                }
             }
         }
     }
@@ -866,13 +884,19 @@ impl QTermApp {
                         ui.add_space(1.0);
                     }
 
-                    // "+" 新建标签按钮
+                    // "+" 新建标签按钮：弹出 Shell 类型菜单
                     let add_btn = ui.add(egui::Button::new(
                         egui::RichText::new("+").size(add_fs).color(side_text),
                     ).frame(false));
-                    if add_btn.clicked() {
-                        self.new_tab();
-                    }
+                    add_btn.context_menu(|ui| {
+                        use crate::pty::ShellType;
+                        for st in ShellType::available_shells() {
+                            if ui.button(st.label()).clicked() {
+                                self.new_tab_with_shell(st);
+                                ui.close_menu();
+                            }
+                        }
+                    });
                     add_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
 
                     // 标签后的空白区域可拖拽移动窗口
@@ -965,9 +989,17 @@ impl QTermApp {
                             if ui.button("+ SSH").clicked() {
                                 self.ssh_dialog.open = true;
                             }
-                            if ui.button("+ 本地").clicked() {
-                                self.new_tab();
-                            }
+                            // "+ 本地" 按钮：弹出 Shell 类型菜单
+                            let local_btn = ui.button("+ 本地");
+                            local_btn.context_menu(|ui| {
+                                use crate::pty::ShellType;
+                                for st in ShellType::available_shells() {
+                                    if ui.button(st.label()).clicked() {
+                                        self.new_tab_with_shell(st);
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
                             // 主题切换按钮
                             let is_dark = self.theme.is_dark();
                             let theme_label = if is_dark { "浅色" } else { "深色" };

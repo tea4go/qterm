@@ -1,5 +1,7 @@
 pub mod platform;
 
+pub use platform::ShellType;
+
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
