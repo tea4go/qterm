@@ -482,6 +482,7 @@ impl eframe::App for QTermApp {
             if now.duration_since(self.last_hotkey_time).as_millis() >= 300 {
                 self.last_hotkey_time = now;
                 self.window_hidden = !self.window_hidden;
+                eprintln!("[HOTKEY] 切换窗口: window_hidden={}", self.window_hidden);
                 if self.window_hidden {
                     // 隐藏窗口：最小化（保持事件循环活跃，Visible(false) 会停止 update）
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -497,7 +498,7 @@ impl eframe::App for QTermApp {
                             win32_util::set_foreground(hwnd);
                         }
                     }
-                    ctx.request_repaint(); // 强制立即重绘，避免恢复时闪烁
+                    //ctx.request_repaint(); // 强制立即重绘，避免恢复时闪烁
                 }
             } else {
                 // 防抖跳过

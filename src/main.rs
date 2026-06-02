@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+// debug 模式保留控制台窗口（方便 eprintln! 调试），release 模式隐藏控制台
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // 模块声明：各功能模块
 mod app;       // 应用主逻辑
@@ -197,6 +199,7 @@ fn main() -> eframe::Result<()> {
 
     // 启动日志
     log_startup("========== QTerm 启动 ==========");
+    eprintln!("========== QTerm 启动 ==========");
     log_monitors();
 
     let cfg = config::AppConfig::load();
