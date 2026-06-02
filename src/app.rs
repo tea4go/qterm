@@ -7,6 +7,8 @@ use crate::tab::Tab;
 use crate::terminal::renderer;
 use crate::theme::AppTheme;
 use crate::ui::split_pane::{SplitDirection, PaneKind, PaneBackend};
+#[cfg(target_os = "windows")]
+use crate::win32_util;
 
 // UI 常量尺寸
 const TITLE_BAR_HEIGHT: f32 = 40.0;  // 标题栏高度
@@ -39,8 +41,10 @@ pub struct QTermApp {
     selected_connection: Option<usize>,    // 当前选中的连接索引
     collapsed_groups: std::collections::HashSet<String>, // 收缩的分组名集合
     window_hidden: bool,                      // 窗口是否处于隐藏状态（全局热键切换）
+    always_on_top: bool,                      // 窗口是否置顶
     egui_ctx: egui::Context,                  // egui 上下文引用（用于后台线程唤醒）
     hotkey_rx: std::sync::mpsc::Receiver<()>, // 全局热键事件接收端
+    last_hotkey_time: std::time::Instant,       // 上次热键触发时间（防抖）
 }
 
 /// 右键上下文菜单状态
@@ -75,7 +79,6 @@ impl QTermApp {
         let font_size = preferences.shell_font_size;
         theme.system.apply_to_egui(&cc.egui_ctx, is_dark, preferences.general_font_size);
         let left_pane_width = config.left_pane_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
-        eprintln!("[DEBUG] init left_pane_width from config: {}", left_pane_width);
         let mut app = Self {
             tabs: Vec::new(),
             active_tab: 0,
@@ -99,6 +102,7 @@ impl QTermApp {
             selected_connection: None,
             collapsed_groups: std::collections::HashSet::new(),
             window_hidden: false,
+            always_on_top: false,
             egui_ctx: cc.egui_ctx.clone(),
             hotkey_rx: {
                 // 注册全局热键 Ctrl+` 并启动后台监听线程
@@ -109,28 +113,29 @@ impl QTermApp {
                         Some(global_hotkey::hotkey::Modifiers::CONTROL),
                         global_hotkey::hotkey::Code::Backquote,
                     );
-                    eprintln!("[HOTKEY] GlobalHotKeyManager 创建成功，正在注册 Ctrl+` ...");
                     if let Err(e) = manager.register(hotkey) {
-                        eprintln!("[HOTKEY] 注册全局热键失败: {}", e);
-                    } else {
-                        eprintln!("[HOTKEY] 注册全局热键 Ctrl+` 成功");
+                        eprintln!("注册全局热键失败: {}", e);
                     }
-                    // 后台线程：监听全局热键事件，唤醒 egui 事件循环
+                    // 泄漏 manager 使其存活整个进程生命周期（否则 Drop 会注销热键）
+                    std::mem::forget(manager);
+                    // 后台线程：监听全局热键事件，仅转发 Pressed 事件（忽略 Released），唤醒 egui 事件循环
                     std::thread::spawn(move || {
-                        eprintln!("[HOTKEY] 后台监听线程已启动");
                         let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
-                        while receiver.recv().is_ok() {
-                            eprintln!("[HOTKEY] 收到全局热键事件，通知主线程");
-                            let _ = hotkey_tx.send(());
-                            ctx.request_repaint(); // 唤醒隐藏窗口的事件循环
+                        while let Ok(event) = receiver.recv() {
+                            // global-hotkey 0.6 在 Windows 上每次按键触发 pressed+released 两个事件
+                            // 仅处理 Pressed 事件，避免防抖失效导致窗口切换两次
+                            if event.state == global_hotkey::HotKeyState::Pressed {
+                                let _ = hotkey_tx.send(());
+                                ctx.request_repaint(); // 唤醒隐藏窗口的事件循环
+                            }
                         }
-                        eprintln!("[HOTKEY] 后台监听线程退出");
                     });
                 } else {
-                    eprintln!("[HOTKEY] GlobalHotKeyManager 创建失败");
+                    eprintln!("全局热键管理器创建失败");
                 }
                 hotkey_rx
             },
+            last_hotkey_time: std::time::Instant::now(),
             connections_rx: {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
@@ -466,15 +471,36 @@ impl eframe::App for QTermApp {
         }
 
         // 轮询全局热键事件（Ctrl+` 显示/隐藏窗口）
-        if self.hotkey_rx.try_recv().is_ok() {
-            self.window_hidden = !self.window_hidden;
-            eprintln!("[HOTKEY] 切换窗口: window_hidden={}", self.window_hidden);
-            if self.window_hidden {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                eprintln!("[HOTKEY] 已发送 Visible(false)");
+        // 防抖：global-hotkey 0.6 在 Windows 上每次按键会触发 pressed+released 两个事件
+        // 用 300ms 防抖窗口避免快速切换
+        let mut hotkey_triggered = false;
+        while self.hotkey_rx.try_recv().is_ok() {
+            hotkey_triggered = true;
+        }
+        if hotkey_triggered {
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_hotkey_time).as_millis() >= 300 {
+                self.last_hotkey_time = now;
+                self.window_hidden = !self.window_hidden;
+                if self.window_hidden {
+                    // 隐藏窗口：最小化（保持事件循环活跃，Visible(false) 会停止 update）
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                } else {
+                    // 恢复窗口：取消最小化 + 聚焦到前台
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    // Win32 API 确保窗口激活到前台（egui Focus 有时不够强）
+                    #[cfg(target_os = "windows")]
+                    {
+                        let hwnd = win32_util::find_window("QTerm");
+                        if hwnd != 0 {
+                            win32_util::set_foreground(hwnd);
+                        }
+                    }
+                    ctx.request_repaint(); // 强制立即重绘，避免恢复时闪烁
+                }
             } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                eprintln!("[HOTKEY] 已发送 Visible(true)");
+                // 防抖跳过
             }
         }
 
@@ -484,15 +510,19 @@ impl eframe::App for QTermApp {
         }
 
         // 记录窗口位置和尺寸（位置转物理像素，尺寸保持 egui points）
+        // 窗口隐藏/最小化时跳过，避免保存错误的位置
         let ppp = ctx.pixels_per_point();
         ctx.input(|i| {
-            if let Some(rect) = i.viewport().inner_rect {
-                self.last_window_size = Some((rect.width(), rect.height()));
+            let maximized = i.viewport().maximized.unwrap_or(false);
+            if !self.window_hidden && !maximized {
+                if let Some(rect) = i.viewport().inner_rect {
+                    self.last_window_size = Some((rect.width(), rect.height()));
+                }
+                if let Some(rect) = i.viewport().outer_rect {
+                    self.last_window_pos = Some((rect.min.x * ppp, rect.min.y * ppp));
+                }
             }
-            if let Some(rect) = i.viewport().outer_rect {
-                self.last_window_pos = Some((rect.min.x * ppp, rect.min.y * ppp));
-            }
-            self.last_maximized = i.viewport().maximized.unwrap_or(false);
+            self.last_maximized = maximized;
         });
 
         // 处理全局快捷键
@@ -612,7 +642,6 @@ impl eframe::App for QTermApp {
                     let new_width = ui.max_rect().width();
                     let clamped = new_width.clamp(LEFT_PANE_MIN_WIDTH, LEFT_PANE_MAX_WIDTH);
                     if self.frame_count <= 5 || (clamped - self.left_pane_width).abs() > 0.5 {
-                        eprintln!("[DEBUG] frame={} max_rect_w={:.1} clamped={:.1} stored={:.1}", self.frame_count, new_width, clamped, self.left_pane_width);
                     }
                     self.left_pane_width = clamped;
                     // 强制限制宽度并裁剪超出内容，防止面板撑大
@@ -790,12 +819,14 @@ impl eframe::App for QTermApp {
 
     /// 应用退出时保存配置并关闭所有标签页
     fn on_exit(&mut self) {
-        eprintln!("[DEBUG] on_exit called, left_pane_width={}", self.left_pane_width);
-        self.config.window_x = self.last_window_pos.map(|(x, _)| x);
-        self.config.window_y = self.last_window_pos.map(|(_, y)| y);
-        self.config.window_width = self.last_window_size.map(|(w, _)| w);
-        self.config.window_height = self.last_window_size.map(|(_, h)| h);
-        self.config.maximized = self.last_maximized;
+        // 仅在窗口可见时保存位置（隐藏状态下 last_window_pos/size 可能已过期）
+        if !self.window_hidden {
+            self.config.window_x = self.last_window_pos.map(|(x, _)| x);
+            self.config.window_y = self.last_window_pos.map(|(_, y)| y);
+            self.config.window_width = self.last_window_size.map(|(w, _)| w);
+            self.config.window_height = self.last_window_size.map(|(_, h)| h);
+            self.config.maximized = self.last_maximized;
+        }
         self.config.theme = if self.theme.is_dark() { "dark".to_string() } else { "light".to_string() };
         self.config.left_pane_width = self.left_pane_width;
         self.config.save();
@@ -836,7 +867,7 @@ impl QTermApp {
                 // 计算窗口控制按钮占据的右侧区域
                 let btn_w = 32.0;
                 let btn_h = title_bar_h;
-                let total_btn_w = btn_w * 3.0;
+                let total_btn_w = btn_w * 4.0;
                 let screen_right = ctx.screen_rect().right();
                 let right_rect = egui::Rect::from_min_size(
                     egui::Pos2::new(screen_right - total_btn_w, ui.max_rect().top()),
@@ -975,6 +1006,43 @@ impl QTermApp {
                         let hover_bg = egui::Color32::from_white_alpha(20);
                         let close_hover_bg = egui::Color32::from_rgb(232, 17, 35);
                         let btn_size = egui::vec2(btn_w, btn_h);
+
+                        // 置顶切换（钉子图标）
+                        let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let pin_clicked = resp.clicked();
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if resp.hovered() {
+                            ui.painter().rect_filled(rect, 0.0, hover_bg);
+                        }
+                        // 用 Painter 绘制钉子图标
+                        let pin_color = if self.always_on_top {
+                            self.theme.system.text_active_color
+                        } else {
+                            text_color.gamma_multiply(0.5)
+                        };
+                        let cx = rect.center().x;
+                        let cy = rect.center().y;
+                        let pin_stroke = egui::Stroke::new(1.5, pin_color);
+                        // 钉子头部（圆）
+                        ui.painter().circle_stroke(egui::pos2(cx, cy - 2.0), 3.0, pin_stroke);
+                        // 钉子针身（竖线）
+                        ui.painter().line_segment([
+                            egui::pos2(cx, cy + 1.0),
+                            egui::pos2(cx, cy + 7.0),
+                        ], pin_stroke);
+                        // 置顶时填充头部
+                        if self.always_on_top {
+                            ui.painter().circle_filled(egui::pos2(cx, cy - 2.0), 3.0, pin_color);
+                        }
+                        if pin_clicked {
+                            self.always_on_top = !self.always_on_top;
+                            let level = if self.always_on_top {
+                                egui::viewport::WindowLevel::AlwaysOnTop
+                            } else {
+                                egui::viewport::WindowLevel::Normal
+                            };
+                            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
+                        }
 
                         // 最小化
                         let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());

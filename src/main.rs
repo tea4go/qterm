@@ -11,6 +11,8 @@ mod theme;     // 主题系统
 mod sftp;      // SFTP 文件传输
 mod ssh;       // SSH 远程连接
 mod ui;        // UI 组件（分屏、SFTP面板、SSH对话框）
+#[cfg(target_os = "windows")]
+mod win32_util; // Win32 原生窗口操作（隐藏/显示/聚焦）
 
 use eframe::egui;
 
