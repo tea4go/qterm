@@ -967,18 +967,67 @@ impl QTermApp {
     /// 渲染左侧面板内容
     fn render_left_pane(&mut self, ui: &mut egui::Ui) {
         let text_color = self.theme.system.text_color;
-        let fs = self.preferences.general_font_size;
+        let cfg_fs = self.preferences.config_font_size;
 
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(5.0, 0.0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        self.sidebar_label(ui, "终端", fs, text_color);
-                    });
-                    ui.add_space(4.0);
-                    ui.separator();
+                    // 会话管理标题栏：32px 高度，config 字体粗体
+                    let header_h = 32.0;
+                    let (header_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), header_h),
+                        egui::Sense::hover(),
+                    );
+                    // 左侧：标题文字
+                    ui.painter().text(
+                        egui::Pos2::new(header_rect.min.x + 5.0, header_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "会话管理",
+                        self.config_font_id(cfg_fs),
+                        text_color,
+                    );
+                    // 右侧：展开/收缩全部切换图标（二选一显示）
+                    let icon_fs = (cfg_fs * 0.64).max(10.0); // 图标字体大小
+                    let icon_size = 20.0;
+                    let has_collapsed = !self.collapsed_groups.is_empty();
+                    let (icon, icon_id) = if has_collapsed {
+                        ("\u{25B6}", "expand_all")  // 有收缩分组 → 显示展开图标（与分组收缩箭头一致）
+                    } else {
+                        ("\u{25BC}", "collapse_all") // 全部展开 → 显示收缩图标（向下，与分组展开箭头一致）
+                    };
+                    let icon_x = header_rect.max.x - icon_size - 4.0;
+                    let icon_rect = egui::Rect::from_min_size(
+                        egui::Pos2::new(icon_x, header_rect.center().y - icon_size / 2.0),
+                        egui::vec2(icon_size, icon_size),
+                    );
+                    let icon_resp = ui.interact(icon_rect, egui::Id::new(icon_id), egui::Sense::click());
+                    let icon_bg = if icon_resp.hovered() { egui::Color32::from_white_alpha(20) } else { egui::Color32::TRANSPARENT };
+                    ui.painter().rect_filled(icon_rect, 3.0, icon_bg);
+                    ui.painter().text(
+                        icon_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        icon,
+                        self.config_font_id(icon_fs),
+                        text_color,
+                    );
+                    let icon_clicked = icon_resp.clicked();
+                    icon_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if icon_clicked {
+                        if has_collapsed {
+                            // 展开全部：清空 collapsed_groups
+                            self.collapsed_groups.clear();
+                        } else {
+                            // 收缩全部：将所有分组加入 collapsed_groups
+                            let all_groups: Vec<String> = self.connections.iter().map(|c| c.group_name.clone()).collect();
+                            self.collapsed_groups.extend(all_groups);
+                        }
+                    }
+                    // 标题下方分隔线
+                    ui.painter().line_segment(
+                        [header_rect.left_bottom(), header_rect.right_bottom()],
+                        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+                    );
 
                     self.render_terminal_pane(ui);
 
@@ -1005,7 +1054,7 @@ impl QTermApp {
                             let theme_label = if is_dark { "浅色" } else { "深色" };
                             if ui.button(theme_label).clicked() {
                                 self.theme.toggle_mode();
-                                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), fs);
+                                self.theme.system.apply_to_egui(ui.ctx(), self.theme.is_dark(), self.preferences.general_font_size);
                             }
                         });
                         ui.add_space(2.0);

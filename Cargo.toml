@@ -22,6 +22,7 @@ aes = "0.9"
 cfb-mode = "0.9"
 cipher = "0.5"
 hex = "0.4"
+global-hotkey = "0.6"
 
 [profile.release]
 opt-level = "z"
