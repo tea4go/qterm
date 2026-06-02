@@ -109,17 +109,25 @@ impl QTermApp {
                         Some(global_hotkey::hotkey::Modifiers::CONTROL),
                         global_hotkey::hotkey::Code::Backquote,
                     );
+                    eprintln!("[HOTKEY] GlobalHotKeyManager 创建成功，正在注册 Ctrl+` ...");
                     if let Err(e) = manager.register(hotkey) {
-                        eprintln!("注册全局热键失败: {}", e);
+                        eprintln!("[HOTKEY] 注册全局热键失败: {}", e);
+                    } else {
+                        eprintln!("[HOTKEY] 注册全局热键 Ctrl+` 成功");
                     }
                     // 后台线程：监听全局热键事件，唤醒 egui 事件循环
                     std::thread::spawn(move || {
+                        eprintln!("[HOTKEY] 后台监听线程已启动");
                         let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
                         while receiver.recv().is_ok() {
+                            eprintln!("[HOTKEY] 收到全局热键事件，通知主线程");
                             let _ = hotkey_tx.send(());
                             ctx.request_repaint(); // 唤醒隐藏窗口的事件循环
                         }
+                        eprintln!("[HOTKEY] 后台监听线程退出");
                     });
+                } else {
+                    eprintln!("[HOTKEY] GlobalHotKeyManager 创建失败");
                 }
                 hotkey_rx
             },
@@ -460,10 +468,13 @@ impl eframe::App for QTermApp {
         // 轮询全局热键事件（Ctrl+` 显示/隐藏窗口）
         if self.hotkey_rx.try_recv().is_ok() {
             self.window_hidden = !self.window_hidden;
+            eprintln!("[HOTKEY] 切换窗口: window_hidden={}", self.window_hidden);
             if self.window_hidden {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                eprintln!("[HOTKEY] 已发送 Visible(false)");
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                eprintln!("[HOTKEY] 已发送 Visible(true)");
             }
         }
 
