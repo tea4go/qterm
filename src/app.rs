@@ -38,6 +38,9 @@ pub struct QTermApp {
     connections_rx: Option<std::sync::mpsc::Receiver<Vec<Connection>>>,
     selected_connection: Option<usize>,    // 当前选中的连接索引
     collapsed_groups: std::collections::HashSet<String>, // 收缩的分组名集合
+    window_hidden: bool,                      // 窗口是否处于隐藏状态（全局热键切换）
+    egui_ctx: egui::Context,                  // egui 上下文引用（用于后台线程唤醒）
+    hotkey_rx: std::sync::mpsc::Receiver<()>, // 全局热键事件接收端
 }
 
 /// 右键上下文菜单状态
@@ -95,6 +98,31 @@ impl QTermApp {
             connections: Vec::new(),
             selected_connection: None,
             collapsed_groups: std::collections::HashSet::new(),
+            window_hidden: false,
+            egui_ctx: cc.egui_ctx.clone(),
+            hotkey_rx: {
+                // 注册全局热键 Ctrl+` 并启动后台监听线程
+                let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+                let ctx = cc.egui_ctx.clone();
+                if let Ok(manager) = global_hotkey::GlobalHotKeyManager::new() {
+                    let hotkey = global_hotkey::hotkey::HotKey::new(
+                        Some(global_hotkey::hotkey::Modifiers::CONTROL),
+                        global_hotkey::hotkey::Code::Backquote,
+                    );
+                    if let Err(e) = manager.register(hotkey) {
+                        eprintln!("注册全局热键失败: {}", e);
+                    }
+                    // 后台线程：监听全局热键事件，唤醒 egui 事件循环
+                    std::thread::spawn(move || {
+                        let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
+                        while receiver.recv().is_ok() {
+                            let _ = hotkey_tx.send(());
+                            ctx.request_repaint(); // 唤醒隐藏窗口的事件循环
+                        }
+                    });
+                }
+                hotkey_rx
+            },
             connections_rx: {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
@@ -108,6 +136,7 @@ impl QTermApp {
         app.theme.terminal.font_bold = app.preferences.shell_font_bold;
         app.config.font_size = font_size;
         app.new_tab();
+
         app
     }
 
@@ -425,6 +454,16 @@ impl eframe::App for QTermApp {
                 Ok(conns) => self.connections = conns,
                 Err(std::sync::mpsc::TryRecvError::Empty) => self.connections_rx = Some(rx),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+
+        // 轮询全局热键事件（Ctrl+` 显示/隐藏窗口）
+        if self.hotkey_rx.try_recv().is_ok() {
+            self.window_hidden = !self.window_hidden;
+            if self.window_hidden {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             }
         }
 
